@@ -1,0 +1,61 @@
+name: Build OmniChain
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to publish a Release when a v* tag is pushed
+
+jobs:
+  dsp-tests:
+    name: DSP stress test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run engine test
+        run: |
+          g++ -std=c++17 -O2 tests/EngineTest.cpp Source/dsp/*.cpp -o enginetest
+          ./enginetest
+
+  windows:
+    name: Windows VST3 + Standalone (MSVC)
+    runs-on: windows-latest
+    needs: dsp-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get JUCE 7.0.12
+        run: git clone --depth 1 --branch 7.0.12 https://github.com/juce-framework/JUCE.git JUCE
+
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build
+        run: cmake --build build --config Release --target OmniChain_VST3 OmniChain_Standalone --parallel
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $out = "OmniChain-Windows"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item -Recurse "build/OmniChain_artefacts/Release/VST3/OmniChain.vst3" "$out/"
+          Copy-Item "build/OmniChain_artefacts/Release/Standalone/OmniChain.exe" "$out/"
+          Copy-Item "README.md" "$out/"
+          Compress-Archive -Path $out -DestinationPath "OmniChain-Windows.zip" -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OmniChain-Windows
+          path: OmniChain-Windows
+
+      - name: Publish release (only for v* tags)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: OmniChain-Windows.zip
+          generate_release_notes: true

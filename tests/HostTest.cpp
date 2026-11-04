@@ -1,0 +1,119 @@
+// Headless integration test: drives the real OmniChainProcessor + editor
+#include <JuceHeader.h>
+#include "../Source/PluginProcessor.h"
+#include "../Source/PluginEditor.h"
+
+using namespace juce;
+
+static int failures = 0;
+#define CHECK(c, msg) do { if (! (c)) { std::printf ("FAIL: %s\n", msg); ++failures; } } while (0)
+
+static float runAudio (OmniChainProcessor& p, int blocks, int bs, int chans, double sr, bool& finite)
+{
+    AudioBuffer<float> buf (chans, bs); MidiBuffer midi; float peak = 0; static int64 t = 0;
+    for (int b = 0; b < blocks; ++b)
+    {
+        for (int i = 0; i < bs; ++i, ++t)
+        {
+            const double ts = double (t) / sr; const double ph = std::fmod (ts, 0.5);
+            float x = 0; for (int h = 1; h < 12; ++h) x += (float) std::sin (MathConstants<double>::twoPi * 146.8 * h * ts) / (float) h;
+            x *= 0.25f * (float) std::exp (-ph * 5.0);
+            for (int c = 0; c < chans; ++c) buf.setSample (c, i, x);
+        }
+        p.processBlock (buf, midi);
+        for (int c = 0; c < chans; ++c)
+            for (int i = 0; i < bs; ++i)
+            {
+                const float v = buf.getSample (c, i);
+                if (! std::isfinite (v)) finite = false;
+                peak = jmax (peak, std::abs (v));
+            }
+        if (b % 8 == 0) MessageManager::getInstance()->runDispatchLoopUntil (1);
+    }
+    return peak;
+}
+
+static void snapshot (OmniChainProcessor& p, const String& file)
+{
+    std::unique_ptr<AudioProcessorEditor> ed (p.createEditor());
+    ed->setVisible (true);
+    for (int i = 0; i < 5; ++i) MessageManager::getInstance()->runDispatchLoopUntil (40);
+    auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+    File f (file); f.deleteFile();
+    FileOutputStream os (f); PNGImageFormat png; png.writeImageToStream (img, os);
+    std::printf ("wrote %s (%dx%d)\n", file.toRawUTF8(), img.getWidth(), img.getHeight());
+}
+
+int main (int argc, char** argv)
+{
+    ScopedJuceInitialiser_GUI init;
+    const String outDir = argc > 1 ? String (argv[1]) : String ("/tmp");
+    const double sr = 48000.0; const int bs = 512;
+
+    OmniChainProcessor p;
+    p.setPlayConfigDetails (2, 2, sr, bs);
+    p.prepareToPlay (sr, bs);
+    CHECK (p.getLatencySamples() == 0, "latency must be 0");
+
+    // 1. every factory preset renders sane audio
+    const int np = p.getNumPrograms();
+    for (int i = 0; i < np; ++i)
+    {
+        p.setCurrentProgram (i);
+        p.engine.service();
+        bool fin = true;
+        runAudio (p, 8, bs, 2, sr, fin);           // let crossfades settle
+        p.engine.service();
+        const float pk = runAudio (p, 120, bs, 2, sr, fin);
+        std::printf ("preset %-22s peak %.2f %s\n", p.getProgramName (i).toRawUTF8(), pk, fin ? "" : "NaN!");
+        CHECK (fin, "non-finite output");
+        CHECK (pk < 4.0f, "preset too loud");
+        CHECK (i == 0 || pk > 0.005f, "preset silent");
+    }
+
+    // 2. state round-trip
+    p.setCurrentProgram (4);
+    MemoryBlock mb; p.getStateInformation (mb);
+    OmniChainProcessor p2; p2.setPlayConfigDetails (2, 2, sr, bs); p2.prepareToPlay (sr, bs);
+    p2.setStateInformation (mb.getData(), (int) mb.getSize());
+    bool same = true;
+    for (auto* prm : p.getParameters())
+    {
+        auto* a = dynamic_cast<RangedAudioParameter*> (prm);
+        auto* b = p2.apvts.getParameter (a->getParameterID());
+        if (b == nullptr || std::abs (a->getValue() - b->getValue()) > 1.0e-5f) same = false;
+    }
+    CHECK (same, "state round trip mismatch");
+    CHECK (p2.currentPresetName == p.currentPresetName, "preset name not restored");
+    std::printf ("state round-trip: %s, %d params, %d bytes\n", same ? "ok" : "MISMATCH", p.getParameters().size(), (int) mb.getSize());
+
+    // 3. slot move keeps the chain
+    p.setCurrentProgram (1); p.engine.service();
+    const int t0 = p.getSlotType (0), t4 = p.getSlotType (4);
+    p.moveSlot (0, 4);
+    CHECK (p.getSlotType (4) == t0, "move: slot 0 should land at 4");
+    CHECK (p.getSlotType (3) == t4, "move: neighbours shift down");
+    { bool fin = true; runAudio (p, 50, bs, 2, sr, fin); CHECK (fin, "NaN after move"); }
+    p.moveSlot (4, 0);
+    CHECK (p.getSlotType (0) == t0, "move back");
+
+    // 4. odd block sizes, mono layouts, sample rate change
+    for (int bsz : { 1, 7, 33, 4096 })
+    { bool fin = true; runAudio (p, bsz == 1 ? 3000 : 20, bsz, 2, sr, fin); CHECK (fin, "odd block size NaN"); }
+    {
+        OmniChainProcessor pm; pm.setPlayConfigDetails (1, 1, 44100.0, 256); pm.prepareToPlay (44100.0, 256);
+        pm.setCurrentProgram (5); pm.engine.service(); bool fin = true; runAudio (pm, 8, 256, 1, 44100.0, fin); pm.engine.service();
+        const float pk = runAudio (pm, 100, 256, 1, 44100.0, fin);
+        CHECK (fin && pk > 0.001f, "mono layout");
+        pm.prepareToPlay (96000.0, 1024); runAudio (pm, 50, 1024, 1, 96000.0, fin); CHECK (fin, "96k");
+    }
+
+    // 5. GUI snapshots
+    p.setCurrentProgram (4); p.engine.service(); snapshot (p, outDir + "/omnichain_singing_lead.png");
+    p.setCurrentProgram (10); p.engine.service();
+    p.apvts.getParameter (OmniChainProcessor::pid (1, "byp"))->setValueNotifyingHost (1.0f);
+    snapshot (p, outDir + "/omnichain_lofi.png");
+
+    std::printf ("\n%s (%d failures)\n", failures ? "FAILED" : "ALL HOST TESTS OK", failures);
+    return failures ? 1 : 0;
+}
