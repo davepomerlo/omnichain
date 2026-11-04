@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "dsp/NamEffect.h"
 
 using namespace juce;
 
@@ -22,6 +23,7 @@ OmniChainProcessor::OmniChainProcessor()
         engine.setSlotParams (s, r);
     }
     engine.setGlobalParams (apvts.getRawParameterValue ("in"), apvts.getRawParameterValue ("out"), apvts.getRawParameterValue ("mix"));
+    formats.registerBasicFormats();
     startTimerHz (40);
 }
 
@@ -156,6 +158,7 @@ void OmniChainProcessor::setStateInformation (const void* data, int sizeInBytes)
         {
             apvts.replaceState (ValueTree::fromXml (*xml));
             currentPresetName = apvts.state.getProperty ("presetName", "Custom").toString();
+            reloadResourcesFromState();
             if (MessageManager::existsAndIsCurrentThread()) engine.service();
         }
 }
@@ -188,6 +191,7 @@ void OmniChainProcessor::resetSlotParams (int slot)
 void OmniChainProcessor::setSlotType (int slot, int type, bool applyDefaults)
 {
     auto* tp = param (slot, "type");
+    if (type != getSlotType (slot)) clearSlotResource (slot);
     setParamValue (tp, tp->convertTo0to1 ((float) type));
     if (applyDefaults)
     {
@@ -206,6 +210,10 @@ void OmniChainProcessor::moveSlot (int from, int to)
     const auto item = v[(size_t) from];
     v.erase (v.begin() + from);
     v.insert (v.begin() + to, item);
+    StringArray paths, errs;
+    for (int s = 0; s < oc::kNumSlots; ++s) { paths.add (getSlotFile (s).getFullPathName()); errs.add (slotError[s]); }
+    paths.move (from, to); errs.move (from, to);
+    for (int s = 0; s < oc::kNumSlots; ++s) { setSlotPath (s, paths[s]); slotError[s] = errs[s]; }
     for (int s = 0; s < oc::kNumSlots; ++s)
         for (int j = 0; j < kNumSlotParamIds; ++j) setParamValue (param (s, kSlotParamIds[j]), v[(size_t) s][(size_t) j]);
 }
@@ -213,6 +221,9 @@ void OmniChainProcessor::moveSlot (int from, int to)
 void OmniChainProcessor::copySlot (int from, int to)
 {
     if (from == to) return;
+    engine.setSlotResource (to, engine.getSlotResource (from));
+    setSlotPath (to, getSlotFile (from).getFullPathName());
+    slotError[to] = slotError[from];
     for (int j = 0; j < kNumSlotParamIds; ++j)
         setParamValue (param (to, kSlotParamIds[j]), param (from, kSlotParamIds[j])->getValue());
 }
@@ -270,8 +281,127 @@ bool OmniChainProcessor::loadPresetFile (const File& f)
         if (auto* p = apvts.getParameter (c.getProperty ("id").toString()))
             setParamValue (p, p->convertTo0to1 ((float) c.getProperty ("value")));
     }
+    for (int s = 0; s < oc::kNumSlots; ++s) setSlotPath (s, tree.getProperty ("res" + String (s + 1)).toString());
+    reloadResourcesFromState();
     currentPresetName = f.getFileNameWithoutExtension();
     return true;
+}
+
+// ------------------------------------------------------------------ file-based slots
+void OmniChainProcessor::setSlotPath (int slot, const String& path)
+{
+    apvts.state.setProperty ("res" + String (slot + 1), path, nullptr);
+}
+
+File OmniChainProcessor::getSlotFile (int slot) const
+{
+    const auto p = apvts.state.getProperty ("res" + String (slot + 1)).toString();
+    return p.isEmpty() ? File() : File (p);
+}
+
+void OmniChainProcessor::clearSlotResource (int slot)
+{
+    engine.setSlotResource (slot, nullptr);
+    setSlotPath (slot, {});
+    slotError[slot].clear();
+}
+
+File OmniChainProcessor::getContentFolder (bool nam)
+{
+    auto f = File::getSpecialLocation (File::userDocumentsDirectory).getChildFile (nam ? "OmniChain NAM Models" : "OmniChain IRs");
+    if (! f.exists()) f.createDirectory();
+    return f;
+}
+
+std::shared_ptr<const oc::Resource> OmniChainProcessor::loadIr (const File& f, String& error)
+{
+    std::unique_ptr<AudioFormatReader> reader (formats.createReaderFor (f));
+    if (reader == nullptr) { error = "Can't read this audio file."; return nullptr; }
+    if (reader->sampleRate <= 0 || reader->lengthInSamples <= 0) { error = "Empty audio file."; return nullptr; }
+    const int len = (int) jmin<int64> (reader->lengthInSamples, (int64) (reader->sampleRate * 2.0));
+    const int nch = (int) jmin<unsigned int> (2u, reader->numChannels);
+    AudioBuffer<float> buf (nch, len);
+    reader->read (&buf, 0, len, 0, true, nch > 1);
+    auto ir = std::make_shared<oc::IrResource>();
+    ir->sampleRate = reader->sampleRate;
+    ir->name = f.getFileName().toStdString();
+    for (int c = 0; c < nch; ++c) ir->ch[c].assign (buf.getReadPointer (c), buf.getReadPointer (c) + len);
+    return ir;
+}
+
+bool OmniChainProcessor::loadSlotFile (int slot, const File& f)
+{
+    const bool nam = isNamFile (f);
+    if (! nam && ! isIrFile (f)) { slotError[slot] = "Unsupported file type: " + f.getFileName(); return false; }
+    if (! f.existsAsFile()) { slotError[slot] = "File not found: " + f.getFileName(); return false; }
+    std::shared_ptr<const oc::Resource> res;
+    String err;
+    if (nam)
+    {
+        auto r = oc::loadNamFile (f.getFullPathName().toStdString());
+        res = r.resource; err = String (r.error);
+    }
+    else res = loadIr (f, err);
+    if (res == nullptr) { slotError[slot] = err; return false; }
+
+    const int type = nam ? oc::FxNam : oc::FxCabIR;
+    if (getSlotType (slot) != type) setSlotType (slot, type, true);
+    engine.setSlotResource (slot, res);
+    setSlotPath (slot, f.getFullPathName());
+    slotError[slot].clear();
+    lastFileFolder = f.getParentDirectory();
+    return true;
+}
+
+void OmniChainProcessor::stepSlotFile (int slot, int delta)
+{
+    const auto cur = getSlotFile (slot);
+    if (! cur.existsAsFile()) return;
+    const bool nam = isNamFile (cur);
+    auto files = cur.getParentDirectory().findChildFiles (File::findFiles, false, nam ? "*.nam" : "*.wav;*.aif;*.aiff;*.flac");
+    if (files.size() < 2) return;
+    files.sort();
+    const int idx = files.indexOf (cur);
+    loadSlotFile (slot, files[((idx < 0 ? 0 : idx) + delta + files.size()) % files.size()]);
+}
+
+void OmniChainProcessor::reloadResourcesFromState()
+{
+    for (int s = 0; s < oc::kNumSlots; ++s)
+    {
+        const auto f = getSlotFile (s);
+        const int t = getSlotType (s);
+        if (! oc::typeUsesResource (t) || f == File())
+        {
+            engine.setSlotResource (s, nullptr);
+            if (! oc::typeUsesResource (t)) setSlotPath (s, {});
+            slotError[s].clear();
+            continue;
+        }
+        if (! loadSlotFile (s, f))
+        {
+            engine.setSlotResource (s, nullptr);
+            setSlotPath (s, f.getFullPathName());    // keep the path so the project can be fixed later
+        }
+    }
+}
+
+String OmniChainProcessor::getSlotFileText (int slot, int& severity)
+{
+    severity = 0;
+    if (slotError[slot].isNotEmpty()) { severity = 2; return slotError[slot]; }
+    const auto res = engine.getSlotResource (slot);
+    if (res == nullptr)
+        return getSlotType (slot) == oc::FxNam ? "No model loaded - click Load or drop a .nam file here"
+                                                : "No IR loaded - click Load or drop a .wav file here";
+    String txt = String::fromUTF8 (res->name.c_str());
+    const double sr = engine.getSampleRate();
+    if (getSlotType (slot) == oc::FxNam && sr > 0 && std::abs (sr - res->sampleRate) > 1.0)
+    {
+        severity = 1;
+        txt << "  |  model is " << String (res->sampleRate / 1000.0, 1) << " kHz, project " << String (sr / 1000.0, 1) << " kHz";
+    }
+    return txt;
 }
 
 AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new OmniChainProcessor(); }

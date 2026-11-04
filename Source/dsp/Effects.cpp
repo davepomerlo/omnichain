@@ -1,5 +1,6 @@
 // OmniChain - effect implementations. All effects are zero-latency (no lookahead, no FFT blocks).
 #include "Effects.h"
+#include "Convolver.h"
 
 namespace oc
 {
@@ -1336,6 +1337,65 @@ struct ImagerFx final : Effect
         }
     }
 };
+// =====================================================================================
+struct CabIrFx final : Effect
+{
+    PartitionedConvolver conv; Biquad lc, hc; bool loaded = false, useLc = false, useHc = false;
+    float lastLc = -1, lastHc = -1;
+    void prepare (double s, int b) override
+    {
+        Effect::prepare (s, b);
+        loaded = false; lastLc = lastHc = -1;
+        auto ir = std::dynamic_pointer_cast<const IrResource> (resource);
+        if (ir == nullptr || ir->ch[0].empty()) return;
+        const double srcRate = ir->sampleRate > 0 ? ir->sampleRate : sr;
+        const double ratio = sr / srcRate;
+        const int inLen = (int) std::min<double> ((double) ir->ch[0].size(), srcRate * 2.0);
+        const int outLen = std::max (1, (int) std::floor ((double) inLen * ratio));
+        std::vector<float> h[2];
+        for (int c = 0; c < 2; ++c)
+        {
+            const auto& src = (c == 1 && ! ir->ch[1].empty()) ? ir->ch[1] : ir->ch[0];
+            h[c].resize ((size_t) outLen);
+            for (int i = 0; i < outLen; ++i)
+            {
+                const double pos = (double) i / ratio;
+                const int i0 = (int) pos; const float fr = (float) (pos - i0);
+                const float a = i0 < inLen ? src[(size_t) i0] : 0.0f, bb = i0 + 1 < inLen ? src[(size_t) i0 + 1] : 0.0f;
+                h[c][(size_t) i] = a + fr * (bb - a);
+            }
+        }
+        double e0 = 0, e1 = 0;
+        for (int i = 0; i < outLen; ++i) { e0 += (double) h[0][(size_t) i] * h[0][(size_t) i]; e1 += (double) h[1][(size_t) i] * h[1][(size_t) i]; }
+        const double e = std::max (e0, e1);
+        if (e <= 1.0e-12) return;
+        const float g = (float) (0.5 / std::sqrt (e));
+        for (auto& ch : h) for (auto& x : ch) x *= g;
+        conv.setup (h[0].data(), h[1].data(), outLen);
+        loaded = true;
+        reset();
+    }
+    void reset() override { if (loaded) conv.reset(); lc.reset(); hc.reset(); }
+    void process (float* L, float* R, int n, const float* v, const Context&) override
+    {
+        if (! loaded) { meter = 0; return; }
+        if (v[0] != lastLc) { lastLc = v[0]; useLc = v[0] > 20.5f; if (useLc) lc.set (Biquad::HP, v[0], 0.707f, 0, sr); }
+        if (v[1] != lastHc) { lastHc = v[1]; useHc = v[1] < 19600.0f; if (useHc) hc.set (Biquad::LP, v[1], 0.707f, 0, sr); }
+        conv.setActiveLength ((int) (v[2] * 0.001f * float (sr)));
+        conv.process (L, R, n);
+        const float g = dbToGain (v[3]);
+        float* ch[2] = { L, R };
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < n; ++i)
+            {
+                float x = ch[c][i];
+                if (useLc) x = lc.tick (x, c);
+                if (useHc) x = hc.tick (x, c);
+                ch[c][i] = x * g;
+            }
+        meter = 1.0f;
+    }
+};
 } // namespace
 
 std::unique_ptr<Effect> createEffect (int type)
@@ -1372,6 +1432,8 @@ std::unique_ptr<Effect> createEffect (int type)
         case FxGlitch:     e.reset (new GlitchFx()); break;
         case FxGranular:   e.reset (new GranularFx()); break;
         case FxImager:     e.reset (new ImagerFx()); break;
+        case FxCabIR:      e.reset (new CabIrFx()); break;
+        case FxNam:        e = createNamEffect(); break;
         default:           e.reset (new NoneFx()); type = FxNone; break;
     }
     e->type = type;

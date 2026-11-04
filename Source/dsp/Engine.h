@@ -42,6 +42,11 @@ public:
     // parameters are rewritten so effect state (delay tails etc.) travels with the slot.
     void requestMove (int from, int to);
 
+    // File-based effects (Cab IR, NAM): control thread only. The slot's effect is rebuilt with the
+    // new data off the audio thread and crossfaded in. Resources travel with the slot on moves.
+    void setSlotResource (int slot, std::shared_ptr<const Resource> r);
+    std::shared_ptr<const Resource> getSlotResource (int slot);
+
     float getSlotMeter (int s) const { return slots[(size_t) s].meter.load (std::memory_order_relaxed); }
     float takeInPeak()  { return inPeak.exchange (0.0f); }
     float takeOutPeak() { return outPeak.exchange (0.0f); }
@@ -53,6 +58,7 @@ private:
         Effect* active = nullptr;
         std::atomic<Effect*> ready { nullptr };
         std::atomic<int> activeType { 0 };
+        std::atomic<uint32_t> activeResVer { 0 };
         float fade = 0.0f, byp = 1.0f;
         Smooth mix, lvl;
         float frozen[kParamsPerSlot] = {};
@@ -65,6 +71,8 @@ private:
     void applyMove (int from, int to);
     static void swapRuntime (Slot& a, Slot& b);
     int wantedType (int s) const;
+    uint32_t wantedResVer (int s, int type) const { return typeUsesResource (type) ? slotResVer[s].load (std::memory_order_acquire) : 0u; }
+    std::unique_ptr<Effect> build (int slot, int type);   // control thread
 
     std::array<Slot, kNumSlots> slots;
     SlotParamRefs refs[kNumSlots];
@@ -77,6 +85,10 @@ private:
 
     int moveFrom[16] = {}, moveTo[16] = {};
     std::atomic<int> mHead { 0 }, mTail { 0 };   // control writes head, audio reads tail
+
+    std::shared_ptr<const Resource> slotRes[kNumSlots];   // control thread (under ctl)
+    std::atomic<uint32_t> slotResVer[kNumSlots] {};
+    uint32_t resCounter = 0;
 
     std::mutex ctl;
     double sr = 0.0;

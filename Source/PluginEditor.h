@@ -33,7 +33,7 @@ public:
 
 class OmniChainEditor;
 
-class SlotCard : public juce::Component, public juce::DragAndDropTarget
+class SlotCard : public juce::Component, public juce::DragAndDropTarget, public juce::FileDragAndDropTarget
 {
 public:
     SlotCard (OmniChainProcessor&, OmniChainEditor&, int index);
@@ -49,6 +49,11 @@ public:
     void itemDragEnter (const SourceDetails&) override { dragOver = true; repaint(); }
     void itemDragExit (const SourceDetails&) override { dragOver = false; repaint(); }
     void itemDropped (const SourceDetails&) override;
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void fileDragEnter (const juce::StringArray&, int, int) override { dragOver = true; repaint(); }
+    void fileDragExit (const juce::StringArray&) override { dragOver = false; repaint(); }
+    void filesDropped (const juce::StringArray& files, int, int) override;
+    void openFileChooser();
 
 private:
     void rebuildForType (int type);
@@ -68,7 +73,10 @@ private:
     juce::TextButton power { "" }, left { "<" }, right { ">" };
     ocui::Knob knobs[oc::kParamsPerSlot];
     juce::Slider mix, level;
-    juce::Label mixLabel, levelLabel, blurb;
+    juce::Label mixLabel, levelLabel, blurb, fileLabel;
+    juce::TextButton loadBtn { "Load" }, filePrev { "<" }, fileNext { ">" };
+    std::unique_ptr<juce::FileChooser> chooser;
+    juce::String shownFileText;
 
     using SA = juce::AudioProcessorValueTreeState::SliderAttachment;
     using BA = juce::AudioProcessorValueTreeState::ButtonAttachment;

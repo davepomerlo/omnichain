@@ -50,6 +50,8 @@ enum EffectType
     FxCrusher, FxGlitch, FxGranular,
     // Utility
     FxImager,
+    // Added in 1.1 (appended so saved projects keep their effect numbers)
+    FxCabIR, FxNam,
     NumEffectTypes
 };
 
@@ -83,6 +85,21 @@ extern const char* const kSyncNames[];
 extern const float kSyncBeats[];
 constexpr int kNumSync = 12;
 
+// Data loaded from a file (impulse response, NAM model). Immutable once built, shared between instances.
+struct Resource
+{
+    virtual ~Resource() = default;
+    std::string name;            // file name for display
+    double sampleRate = 0.0;     // native rate of the IR / model (0 = unknown)
+};
+
+struct IrResource final : Resource
+{
+    std::vector<float> ch[2];    // ch[1] empty for mono IRs
+};
+
+inline bool typeUsesResource (int t) { return t == FxCabIR || t == FxNam; }
+
 class Effect
 {
 public:
@@ -91,6 +108,8 @@ public:
     double sr = 48000.0;
     int maxBlock = 512;
     float meter = 0.0f;               // 0..1 activity / gain reduction for the UI
+    std::shared_ptr<const Resource> resource;   // set before prepare() for file-based effects
+    uint32_t resVer = 0;
 
     virtual void prepare (double sampleRate, int maxBlockSize) { sr = sampleRate; maxBlock = maxBlockSize; }
     virtual void reset() {}
@@ -99,4 +118,5 @@ public:
 };
 
 std::unique_ptr<Effect> createEffect (int type);
+std::unique_ptr<Effect> createNamEffect();   // NamEffect.cpp
 } // namespace oc

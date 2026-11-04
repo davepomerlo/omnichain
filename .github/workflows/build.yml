@@ -21,10 +21,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Build and run engine test
+      - name: Get NAM core + Eigen
+        shell: bash
         run: |
-          g++ -std=c++17 -O2 tests/EngineTest.cpp Source/dsp/*.cpp -o enginetest
-          ./enginetest
+          git clone --depth 1 --branch v0.6.0 https://github.com/sdatkinson/NeuralAmpModelerCore.git ThirdParty/NeuralAmpModelerCore
+          git clone --depth 1 --branch 3.4.1 https://gitlab.com/libeigen/eigen.git ThirdParty/eigen
+      - name: Build and run engine test (incl. convolver + NAM)
+        run: |
+          N=ThirdParty/NeuralAmpModelerCore
+          g++ -std=c++20 -O2 -DNAM_SAMPLE_FLOAT -I$N -IThirdParty/eigen -I$N/Dependencies/nlohmann \
+              tests/EngineTest.cpp Source/dsp/*.cpp $(find $N/NAM -name '*.cpp') -o enginetest
+          ./enginetest $N/example_models/wavenet.nam $N/example_models/lstm.nam
 
   windows:
     name: Windows VST3 + Standalone (MSVC)
@@ -35,6 +42,11 @@ jobs:
 
       - name: Get JUCE 7.0.12
         run: git clone --depth 1 --branch 7.0.12 https://github.com/juce-framework/JUCE.git JUCE
+      - name: Get NAM core + Eigen
+        shell: bash
+        run: |
+          git clone --depth 1 --branch v0.6.0 https://github.com/sdatkinson/NeuralAmpModelerCore.git ThirdParty/NeuralAmpModelerCore
+          git clone --depth 1 --branch 3.4.1 https://gitlab.com/libeigen/eigen.git ThirdParty/eigen
 
       - name: Configure
         run: cmake -S . -B build -A x64

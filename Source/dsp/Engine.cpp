@@ -19,6 +19,32 @@ int Engine::wantedType (int s) const
     return (t < 0 || t >= NumEffectTypes) ? FxNone : t;
 }
 
+std::unique_ptr<Effect> Engine::build (int slot, int type)
+{
+    auto e = createEffect (type);
+    if (typeUsesResource (type))
+    {
+        e->resource = slotRes[slot];
+        e->resVer = slotResVer[slot].load();
+    }
+    e->prepare (sr, maxBlock);
+    e->reset();
+    return e;
+}
+
+void Engine::setSlotResource (int slot, std::shared_ptr<const Resource> r)
+{
+    std::lock_guard<std::mutex> lk (ctl);
+    slotRes[slot] = std::move (r);
+    slotResVer[slot].store (++resCounter, std::memory_order_release);
+}
+
+std::shared_ptr<const Resource> Engine::getSlotResource (int slot)
+{
+    std::lock_guard<std::mutex> lk (ctl);
+    return slotRes[slot];
+}
+
 void Engine::prepare (double sampleRate, int maxBlockSize)
 {
     std::lock_guard<std::mutex> lk (ctl);
@@ -36,9 +62,8 @@ void Engine::prepare (double sampleRate, int maxBlockSize)
         delete s.active; s.active = nullptr;
         delete s.ready.exchange (nullptr);
         const int t = wantedType (i);
-        auto e = createEffect (t);
-        e->prepare (sr, maxBlock);
-        e->reset();
+        auto e = build (i, t);
+        s.activeResVer.store (e->resVer);
         s.active = e.release();
         s.activeType.store (t);
         s.fade = 1.0f;
@@ -70,15 +95,13 @@ void Engine::service()
     {
         auto& s = slots[(size_t) i];
         const int want = wantedType (i);
-        Effect* r = s.ready.load (std::memory_order_acquire);
-        const int inFlight = r ? r->type : -1;   // safe: only this thread deletes effects
-        if (want != s.activeType.load (std::memory_order_acquire) && want != inFlight)
-        {
-            auto e = createEffect (want);
-            e->prepare (sr, maxBlock);
-            e->reset();
-            delete s.ready.exchange (e.release(), std::memory_order_acq_rel);
-        }
+        const uint32_t wantVer = wantedResVer (i, want);
+        Effect* r = s.ready.load (std::memory_order_acquire);  // safe to inspect: only this thread deletes effects
+        const bool inFlight = r != nullptr && r->type == want && r->resVer == wantVer;
+        const bool activeOk = want == s.activeType.load (std::memory_order_acquire)
+                           && wantVer == s.activeResVer.load (std::memory_order_acquire);
+        if (! activeOk && ! inFlight)
+            delete s.ready.exchange (build (i, want).release(), std::memory_order_acq_rel);
     }
 }
 
@@ -99,6 +122,21 @@ void Engine::requestMove (int from, int to)
     const int nh = (h + 1) % 16;
     if (nh == mTail.load()) return;
     moveFrom[h] = from; moveTo[h] = to;
+    {
+        // control-side resources move immediately; the audio thread moves the live effects
+        std::lock_guard<std::mutex> lk (ctl);
+        auto rotate = [&] (auto& get, auto& set)
+        {
+            if (from < to) for (int i = from; i < to; ++i) { auto a = get (i); set (i, get (i + 1)); set (i + 1, a); }
+            else           for (int i = from; i > to; --i) { auto a = get (i); set (i, get (i - 1)); set (i - 1, a); }
+        };
+        auto getR = [&] (int i) { return slotRes[i]; };
+        auto setR = [&] (int i, std::shared_ptr<const Resource> v) { slotRes[i] = std::move (v); };
+        auto getV = [&] (int i) { return slotResVer[i].load(); };
+        auto setV = [&] (int i, uint32_t v) { slotResVer[i].store (v); };
+        rotate (getR, setR);
+        rotate (getV, setV);
+    }
     mHead.store (nh, std::memory_order_release);
 }
 
@@ -106,6 +144,7 @@ void Engine::swapRuntime (Slot& a, Slot& b)
 {
     std::swap (a.active, b.active);
     const int ta = a.activeType.load(); a.activeType.store (b.activeType.load()); b.activeType.store (ta);
+    const uint32_t va = a.activeResVer.load(); a.activeResVer.store (b.activeResVer.load()); b.activeResVer.store (va);
     std::swap (a.fade, b.fade); std::swap (a.byp, b.byp);
     std::swap (a.mix, b.mix); std::swap (a.lvl, b.lvl);
     for (int k = 0; k < kParamsPerSlot; ++k) std::swap (a.frozen[k], b.frozen[k]);
@@ -169,6 +208,7 @@ void Engine::processChunk (float* L, float* R, int n, const Context& ctx)
             {
                 retire (s.active);
                 s.active = r;
+                s.activeResVer.store (r->resVer, std::memory_order_release);
                 s.activeType.store (r->type, std::memory_order_release);
                 s.fade = 0.0f;
                 s.wasIdle = false;
@@ -176,7 +216,8 @@ void Engine::processChunk (float* L, float* R, int n, const Context& ctx)
 
         Effect* fx = s.active;
         if (fx == nullptr) continue;
-        const bool match = (s.activeType.load (std::memory_order_relaxed) == want);
+        const bool match = s.activeType.load (std::memory_order_relaxed) == want
+                        && s.activeResVer.load (std::memory_order_relaxed) == wantedResVer (si, want);
         const float fadeTgt = match ? 1.0f : 0.0f;
         const bool bypassed = rf.bypass && rf.bypass->load (std::memory_order_relaxed) > 0.5f;
         const float bypTgt = bypassed ? 1.0f : 0.0f;

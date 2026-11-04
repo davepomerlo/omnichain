@@ -26,6 +26,7 @@ static const char* const kRingShapes[] = { "Sine", "Triangle", "Square" };
 static const char* const kDelaySync[]  = { "Off", "1/1", "1/2", "1/2D", "1/4", "1/4D", "1/4T", "1/8", "1/8D", "1/8T", "1/16", "1/16T", "1/32" };
 static const char* const kDelayModes[] = { "Digital", "Analog", "Tape", "Ping-Pong", "Reverse" };
 static const char* const kGlitchDiv[]  = { "1/4", "1/8", "1/8T", "1/16", "1/16T", "1/32" };
+static const char* const kOffOn[]      = { "Off", "On" };
 static const char* const kGrainPitch[] = { "Unison", "Oct Up", "Oct Down", "Oct Random", "Fifths", "Detune" };
 
 static const EffectInfo kInfos[NumEffectTypes] =
@@ -126,6 +127,13 @@ static const EffectInfo kInfos[NumEffectTypes] =
     { FxImager, "Stereo Imager", "IMAGE", CatUtility, 1.0f, "Mid/side width, mono-bass, Haas widening and pan.",
       { P ("Width", 0, 200, 100, Lin, "%"), P ("Mono Bass", 20, 500, 20, Log, "Hz<"), P ("Haas", 0, 30, 0, Lin, "ms"),
         P ("Pan", -100, 100, 0, Lin, "pan"), NONE, NONE } },
+
+    { FxCabIR, "Cab IR Loader", "CAB IR", CatDrive, 1.0f, "Load any cabinet impulse response (.wav) - zero-latency convolution.",
+      { P ("Low Cut", 20, 500, 70, Log, "Hz<"), P ("High Cut", 2000, 20000, 20000, Log, "Hz>"), P ("Length", 10, 1000, 250, Log, "ms"),
+        P ("Output", -24, 24, 0, Lin, "dB"), NONE, NONE } },
+    { FxNam, "NAM Capture", "NAM", CatDrive, 1.0f, "Neural Amp Modeler: real amps and pedals captured by AI (.nam files).",
+      { P ("Input", -24, 24, 0, Lin, "dB"), P ("Output", -24, 24, 0, Lin, "dB"), P ("Bass", -12, 12, 0, Lin, "dB"),
+        P ("Mid", -12, 12, 0, Lin, "dB"), P ("Treble", -12, 12, 0, Lin, "dB"), C ("Normalize", kOffOn, 1) } },
 };
 
 const EffectInfo& getInfo (int type)

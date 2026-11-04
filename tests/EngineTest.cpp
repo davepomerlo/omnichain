@@ -1,5 +1,7 @@
 // Offline stress test for the OmniChain engine (native build, no JUCE)
 #include "../Source/dsp/Engine.h"
+#include "../Source/dsp/Convolver.h"
+#include "../Source/dsp/NamEffect.h"
 #include <chrono>
 #include <cstdio>
 #include <xmmintrin.h>
@@ -27,7 +29,7 @@ static void signal (float* L, float* R, int n, int64_t& t, Rng& rng, double sr)
     }
 }
 
-int main()
+int main (int argc, char** argv)
 {
     _mm_setcsr (_mm_getcsr() | 0x8040); // FTZ + DAZ
     const double sr = 48000.0; const int bs = 256;
@@ -135,6 +137,95 @@ int main()
         std::printf ("\nchain test: peak %.2f, max sample jump %.3f, %.1f ns/sample for 8 slots (%.2f%% of one core @48k)\n",
                      peak, maxJump, ns / (blocks * bs), ns / (blocks * bs) * 48000.0 / 1e9 * 100.0);
     }
+
+    // ---------- 3. convolver exactness vs direct convolution ----------
+    {
+        Rng rng (5);
+        for (int len : { 1, 100, 128, 129, 1000, 4100 })
+        {
+            std::vector<float> hL ((size_t) len), hR ((size_t) len);
+            for (int i = 0; i < len; ++i) { hL[(size_t) i] = rng.bi() * std::exp (-i / 300.0f); hR[(size_t) i] = rng.bi() * std::exp (-i / 200.0f); }
+            PartitionedConvolver pc; pc.setup (hL.data(), hR.data(), len);
+            const int total = 20000;
+            std::vector<float> xL (total), xR (total), yL (total), yR (total);
+            for (int i = 0; i < total; ++i) { xL[(size_t) i] = rng.bi(); xR[(size_t) i] = rng.bi(); }
+            yL = xL; yR = xR;
+            int pos = 0; const int sizes[] = { 1, 7, 128, 300, 64, 513 }; int si = 0;
+            while (pos < total) { const int n = std::min (sizes[si++ % 6], total - pos); pc.process (&yL[(size_t) pos], &yR[(size_t) pos], n); pos += n; }
+            double maxErr = 0;
+            for (int t = 0; t < total; t += 37)
+            {
+                double dl = 0, dr = 0;
+                for (int m = 0; m < len && m <= t; ++m) { dl += (double) hL[(size_t) m] * xL[(size_t) (t - m)]; dr += (double) hR[(size_t) m] * xR[(size_t) (t - m)]; }
+                maxErr = std::max (maxErr, std::max (std::fabs (dl - yL[(size_t) t]), std::fabs (dr - yR[(size_t) t])));
+            }
+            std::printf ("convolver len %5d: max error vs direct %.2e %s\n", len, maxErr, maxErr < 1e-3 ? "ok" : "BAD");
+            if (maxErr >= 1e-3) ++failures;
+        }
+    }
+
+    // ---------- 4. Cab IR + NAM in the chain, hot-swapping files, moving slots ----------
+    {
+        Params P; Engine eng; Rng rng (7);
+        const int chain[kNumSlots] = { FxNam, FxCabIR, FxDelay, FxNone, FxNone, FxNone, FxNone, FxNone };
+        for (int s = 0; s < kNumSlots; ++s)
+        {
+            P.type[s] = float (chain[s]); P.byp[s] = 0; P.mix[s] = getInfo (chain[s]).defaultMix * 100; P.lvl[s] = 0;
+            for (int k = 0; k < kParamsPerSlot; ++k) { const auto& pi = getInfo (chain[s]).params[k]; P.p[s][k] = pi.name ? paramToNorm (pi, pi.def) : 0; }
+            SlotParamRefs r; r.type = &P.type[s]; r.bypass = &P.byp[s]; r.mix = &P.mix[s]; r.level = &P.lvl[s];
+            for (int k = 0; k < kParamsPerSlot; ++k) r.p[k] = &P.p[s][k];
+            eng.setSlotParams (s, r);
+        }
+        eng.setGlobalParams (&P.in, &P.out, &P.gmix);
+        auto makeIr = [&] (int len, float decay)
+        {
+            auto ir = std::make_shared<IrResource>(); ir->sampleRate = 44100; ir->name = "test.wav";
+            ir->ch[0].resize ((size_t) len);
+            for (int i = 0; i < len; ++i) ir->ch[0][(size_t) i] = rng.bi() * std::exp (-i / decay);
+            return std::shared_ptr<const Resource> (ir);
+        };
+        std::vector<std::shared_ptr<const Resource>> nams;
+        for (int a = 1; a < argc; ++a)
+        {
+            auto res = loadNamFile (argv[a]);
+            std::printf ("load %s: %s\n", argv[a], res.resource ? "ok" : res.error.c_str());
+            if (res.resource) nams.push_back (res.resource);
+        }
+        if (! nams.empty()) eng.setSlotResource (0, nams[0]);
+        eng.setSlotResource (1, makeIr (9000, 800));
+        eng.prepare (sr, bs);
+        std::vector<float> L (bs), R (bs); int64_t t = 0; Context ctx; ctx.sampleRate = sr;
+        float peak = 0; double ns = 0; const int blocks = int (sr * 12 / bs);
+        for (int b = 0; b < blocks; ++b)
+        {
+            if (b % 60 == 0 && b > 0)
+            {
+                const int act = int (rng.next() % 3);
+                if (act == 0) eng.setSlotResource (1, makeIr (1000 + int (rng.next() % 40000), 300 + rng.uni() * 3000));
+                else if (act == 1 && ! nams.empty()) eng.setSlotResource (0, nams[rng.next() % nams.size()]);
+                else
+                {
+                    eng.requestMove (0, 1);
+                    const float t0 = P.type[0], t1 = P.type[1]; P.type[0] = t1; P.type[1] = t0;
+                    for (int k = 0; k < kParamsPerSlot; ++k) { const float a = P.p[0][k], c = P.p[1][k]; P.p[0][k] = c; P.p[1][k] = a; }
+                }
+            }
+            if (b % 4 == 0) eng.service();
+            signal (L.data(), R.data(), bs, t, rng, sr);
+            auto t0 = std::chrono::high_resolution_clock::now();
+            eng.process (L.data(), R.data(), bs, ctx);
+            ns += std::chrono::duration<double, std::nano> (std::chrono::high_resolution_clock::now() - t0).count();
+            for (int i = 0; i < bs; ++i)
+            {
+                if (! std::isfinite (L[i]) || ! std::isfinite (R[i])) { std::printf ("NaN in IR/NAM chain\n"); ++failures; b = blocks; break; }
+                peak = std::max (peak, std::fabs (L[i]));
+            }
+        }
+        std::printf ("IR/NAM chain: peak %.2f, %.1f ns/sample (%.2f%% of one core @48k), %zu NAM models\n",
+                     peak, ns / (blocks * bs), ns / (blocks * bs) * 48000.0 / 1e9 * 100.0, nams.size());
+        if (peak < 0.01f || peak > 16.0f) { std::printf ("IR/NAM chain level out of range\n"); ++failures; }
+    }
+
     std::printf ("\n%s (%d failures)\n", failures ? "FAILED" : "ALL OK", failures);
     return failures ? 1 : 0;
 }

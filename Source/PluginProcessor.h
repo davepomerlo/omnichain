@@ -46,6 +46,16 @@ public:
     bool savePresetFile (const juce::File& f);
     static juce::File getUserPresetFolder();
 
+    // ---- file-based slots (Cab IR / NAM) ----
+    static bool isIrFile (const juce::File& f)  { return f.hasFileExtension ("wav;aif;aiff;flac"); }
+    static bool isNamFile (const juce::File& f) { return f.hasFileExtension ("nam"); }
+    bool loadSlotFile (int slot, const juce::File& f);          // sets the slot type if needed
+    void stepSlotFile (int slot, int delta);                    // next / previous file in the same folder
+    juce::File getSlotFile (int slot) const;
+    juce::String getSlotFileText (int slot, int& severity);     // severity: 0 ok, 1 warning, 2 error
+    static juce::File getContentFolder (bool nam);
+    juce::File lastFileFolder;
+
     juce::AudioProcessorValueTreeState apvts;
     oc::Engine engine;
     juce::String currentPresetName { "Init (empty chain)" };
@@ -54,6 +64,12 @@ private:
     void timerCallback() override { engine.service(); }
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     void setParamValue (juce::RangedAudioParameter* p, float normalised);
+    void setSlotPath (int slot, const juce::String& path);
+    void clearSlotResource (int slot);
+    void reloadResourcesFromState();
+    std::shared_ptr<const oc::Resource> loadIr (const juce::File& f, juce::String& error);
+    juce::String slotError[oc::kNumSlots];
+    juce::AudioFormatManager formats;
 
     int currentProgram = 0;
     std::vector<float> monoScratch;

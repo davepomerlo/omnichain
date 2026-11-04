@@ -146,7 +146,11 @@ SlotCard::SlotCard (OmniChainProcessor& p, OmniChainEditor& e, int i) : proc (p)
     typeBox.onChange = [this]
     {
         const int id = typeBox.getSelectedId();
-        if (id > 0 && id - 1 != proc.getSlotType (index)) proc.setSlotType (index, id - 1, true);
+        if (id > 0 && id - 1 != proc.getSlotType (index))
+        {
+            proc.setSlotType (index, id - 1, true);
+            if (oc::typeUsesResource (id - 1)) openFileChooser();
+        }
     };
     addAndMakeVisible (typeBox);
 
@@ -168,6 +172,19 @@ SlotCard::SlotCard (OmniChainProcessor& p, OmniChainEditor& e, int i) : proc (p)
     blurb.setMinimumHorizontalScale (0.75f);
     blurb.setInterceptsMouseClicks (false, false);
     addAndMakeVisible (blurb);
+
+    fileLabel.setFont (Font (11.5f, Font::bold));
+    fileLabel.setJustificationType (Justification::centredLeft);
+    fileLabel.setMinimumHorizontalScale (0.6f);
+    fileLabel.setInterceptsMouseClicks (false, false);
+    addChildComponent (fileLabel);
+    loadBtn.setTooltip ("Load a file (or drag one from Explorer onto this slot)");
+    filePrev.setTooltip ("Previous file in the same folder");
+    fileNext.setTooltip ("Next file in the same folder");
+    loadBtn.onClick = [this] { openFileChooser(); };
+    filePrev.onClick = [this] { proc.stepSlotFile (index, -1); };
+    fileNext.onClick = [this] { proc.stepSlotFile (index, 1); };
+    for (auto* b : { &loadBtn, &filePrev, &fileNext }) addChildComponent (*b);
 
     for (auto* s : { &mix, &level })
     {
@@ -211,6 +228,10 @@ void SlotCard::rebuildForType (int type)
     typeBox.setSelectedId (type + 1, dontSendNotification);
     blurb.setText (info.blurb, dontSendNotification);
     const bool empty = type == oc::FxNone;
+    const bool usesFile = oc::typeUsesResource (type);
+    blurb.setVisible (! usesFile);
+    for (Component* c : { (Component*) &fileLabel, (Component*) &loadBtn, (Component*) &filePrev, (Component*) &fileNext }) c->setVisible (usesFile);
+    shownFileText = "\x01";
     for (int k = 0; k < oc::kParamsPerSlot; ++k)
     {
         const auto& pi = info.params[k];
@@ -237,6 +258,19 @@ void SlotCard::refresh()
 {
     const int t = proc.getSlotType (index);
     if (t != shownType) rebuildForType (t);
+    if (oc::typeUsesResource (t))
+    {
+        int sev = 0;
+        const auto txt = proc.getSlotFileText (index, sev);
+        if (txt != shownFileText)
+        {
+            shownFileText = txt;
+            fileLabel.setText (txt, dontSendNotification);
+            fileLabel.setTooltip (proc.getSlotFile (index).getFullPathName());
+            fileLabel.setColour (Label::textColourId, sev == 2 ? Colour (0xffff6b6b) : (sev == 1 ? Colour (0xffffc94d) : ocui::text));
+        }
+    }
+
     // dim the free-running rate/time knob while tempo sync is active
     int syncIdx = -1;
     if (t == oc::FxDelay) syncIdx = 1; else if (t == oc::FxFlanger) syncIdx = 5; else if (t == oc::FxTremolo) syncIdx = 4;
@@ -259,7 +293,15 @@ void SlotCard::resized()
     left.setBounds (h.removeFromRight (20));
     h.removeFromRight (4);
     typeBox.setBounds (h);
-    blurb.setBounds (r.removeFromTop (18).reduced (2, 0));
+    {
+        auto row = r.removeFromTop (22).reduced (2, 1);
+        blurb.setBounds (row);
+        fileNext.setBounds (row.removeFromRight (20));
+        filePrev.setBounds (row.removeFromRight (20));
+        row.removeFromRight (3);
+        loadBtn.setBounds (row.removeFromRight (46));
+        fileLabel.setBounds (row.withTrimmedRight (4));
+    }
     auto bottom = r.removeFromBottom (36).reduced (2, 2);
     auto bl = bottom.removeFromLeft (bottom.getWidth() / 2).reduced (2, 0);
     auto br = bottom.reduced (2, 0);
@@ -306,7 +348,7 @@ void SlotCard::paint (Graphics& g)
         g.setFont (Font (14.0f));
         g.drawText ("+  pick an effect above", getLocalBounds().withTrimmedTop (40), Justification::centred);
         g.setFont (Font (11.0f));
-        g.drawText ("or drop a slot here", getLocalBounds().withTrimmedTop (80), Justification::centred);
+        g.drawText ("or drop a slot, a .wav IR or a .nam model here", getLocalBounds().withTrimmedTop (80), Justification::centred);
     }
 
     g.setColour (dragOver ? Colours::white.withAlpha (0.8f) : accent.withAlpha (empty ? 0.15f : 0.45f));
@@ -349,6 +391,37 @@ void SlotCard::itemDropped (const SourceDetails& d)
     dragOver = false; repaint();
     const int from = d.description.toString().fromFirstOccurrenceOf (":", false, false).getIntValue();
     proc.moveSlot (from, index);
+}
+
+bool SlotCard::isInterestedInFileDrag (const StringArray& files)
+{
+    for (auto& f : files)
+        if (OmniChainProcessor::isIrFile (File (f)) || OmniChainProcessor::isNamFile (File (f))) return true;
+    return false;
+}
+
+void SlotCard::filesDropped (const StringArray& files, int, int)
+{
+    dragOver = false; repaint();
+    for (auto& f : files)
+        if (OmniChainProcessor::isIrFile (File (f)) || OmniChainProcessor::isNamFile (File (f))) { proc.loadSlotFile (index, File (f)); break; }
+}
+
+void SlotCard::openFileChooser()
+{
+    const bool nam = proc.getSlotType (index) == oc::FxNam;
+    File start = proc.getSlotFile (index).getParentDirectory();
+    if (! start.isDirectory()) start = proc.lastFileFolder;
+    if (! start.isDirectory()) start = OmniChainProcessor::getContentFolder (nam);
+    chooser = std::make_unique<FileChooser> (nam ? "Load a NAM model" : "Load a cabinet impulse response", start,
+                                             nam ? "*.nam" : "*.wav;*.aif;*.aiff;*.flac");
+    SafePointer<SlotCard> safe (this);
+    chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles, [safe] (const FileChooser& fc)
+    {
+        if (safe == nullptr) return;
+        const auto f = fc.getResult();
+        if (f.existsAsFile()) safe->proc.loadSlotFile (safe->index, f);
+    });
 }
 
 void SlotCard::showMenu()
@@ -505,7 +578,7 @@ void OmniChainEditor::paint (Graphics& g)
     g.drawText ("OMNICHAIN", 20, 14, 260, 32, Justification::centredLeft);
     g.setFont (Font (12.0f));
     g.setColour (ocui::textDim);
-    g.drawText ("modular multi-fx  |  29 effects  |  0 samples latency", 22, 46, 360, 16, Justification::centredLeft);
+    g.drawText ("modular multi-fx  |  31 effects + IR & NAM loading  |  0 samples latency", 22, 46, 360, 16, Justification::centredLeft);
 
     // meters
     auto drawMeter = [&] (int x, float lvl, const char* lbl)
@@ -551,7 +624,7 @@ void OmniChainEditor::paint (Graphics& g)
 
     g.setColour (ocui::textDim.withAlpha (0.8f));
     g.setFont (Font (11.5f));
-    g.drawText ("Drag a slot header to reorder  |  right-click a header for more  |  double-click a knob to reset  |  hold Ctrl/Cmd for fine control",
+    g.drawText ("Drag a slot header to reorder  |  drop .wav IRs or .nam models on any slot  |  right-click a header for more  |  double-click a knob to reset",
                 0, getHeight() - 22, getWidth(), 16, Justification::centred);
 }
 

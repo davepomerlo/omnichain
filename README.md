@@ -1,6 +1,7 @@
 # OmniChain: modular multi-FX (VST3)
 
-An 8-slot effects chain where any slot can hold any of 29 effects. You can reorder the chain by dragging,
+An 8-slot effects chain where any slot can hold any of 29 built-in effects, plus a **Cab IR loader**
+and a **Neural Amp Modeler (NAM) loader** for free captures of real amps, pedals and cabinets. You can reorder the chain by dragging,
 and the plugin reports **0 samples of latency**. A full 8-slot chain uses about 1–2 % of one CPU core.
 
 ## Install in FL Studio (Windows 10/11, 64-bit)
@@ -13,6 +14,32 @@ and the plugin reports **0 samples of latency**. A full 8-slot chain uses about 
 
 `OmniChain.exe` is the same thing as a standalone app (plug your guitar interface in and play, no DAW needed).
 Set the audio device under *Options → Audio/MIDI settings*.
+
+## Real amps and cabinets for free: NAM captures + cab IRs
+
+**NAM Capture** plays `.nam` files: AI captures of real amps and pedals made by the Neural Amp Modeler community.
+**Cab IR Loader** plays `.wav` impulse responses: recordings of real speaker cabinets.
+
+**Where to get them free**
+* **TONE3000** (tone3000.com, formerly ToneHunt): the biggest free library, with hundreds of thousands of NAM captures and cab IRs.
+  It needs a free account. Click *Download* on a tone page and unzip.
+* Classic free cab IR packs: **God's Cab** (Wilkinson Audio), **Kalthallen Cabs**, the **Origin Effects IR Cab Library**,
+  and the **Redwirez** free IR library.
+
+**How to use them**
+1. Unzip the downloads anywhere. OmniChain suggests `Documents\OmniChain NAM Models` and `Documents\OmniChain IRs`.
+2. Drag a `.nam` or `.wav` file from Explorer onto any slot. The slot switches to the right effect and loads it.
+   You can also pick *NAM Capture* or *Cab IR Loader* in a slot's menu and click **Load**.
+3. Use the small `<` `>` buttons next to Load to step through the other files in the same folder. That's the quickest way to audition a pack.
+4. A NAM capture tagged **"amp head"** or **"preamp"** has no speaker, so put a **Cab IR** slot right after it.
+   **"Full rig"** captures already include the cab. Don't add another.
+
+**Tips**
+* Most NAM captures are made at **48 kHz**. Set FL Studio to 48 kHz (*Options → Audio settings*) for the exact tone.
+  The slot shows a yellow note if the rates differ.
+* **Normalize** (on by default) evens out the volume between captures. **Input** sets how hard you hit the model, like a guitar's volume knob.
+* NAM is the heaviest effect: about 1–10 % of a CPU core per capture, depending on its size. Everything else stays light.
+* Projects and presets remember the file *locations*. If you move or rename the files, the slot shows "File not found". Click Load to point it at the new place.
 
 ## Using it
 
@@ -39,9 +66,11 @@ Set the audio device under *Options → Audio/MIDI settings*.
 | Time & Space | Delay (digital, analog, tape, ping-pong, **reverse**; host sync), Reverb (8-line FDN + **shimmer**), Spring Reverb |
 | Creative | Bitcrusher, **Glitch Grid** (tempo-locked stutter / reverse / tape-stop), **Granular Cloud** |
 | Utility | Stereo Imager (width, mono-bass, Haas, pan) |
+| Loaders | **NAM Capture** (Neural Amp Modeler `.nam`), **Cab IR Loader** (`.wav/.aif/.flac`, zero-latency partitioned convolution) |
 
 ### About "zero latency"
-No effect uses lookahead or FFT blocks, so the plugin reports 0 samples to the DAW and nothing needs compensating.
+No effect uses lookahead, so the plugin reports 0 samples to the DAW and nothing needs compensating.
+The IR loader uses a head + partitioned-FFT design: the first 128 taps run directly, which hides the FFT block delay completely.
 A few effects delay the sound *on purpose*, the way their hardware versions do: chorus, flanger, tape wow, pitch shifting and granular.
 That delay is part of the effect, not added processing latency.
 
@@ -51,6 +80,8 @@ To build it yourself with Visual Studio (2022 or newer, with the "Desktop develo
 
 ```
 git clone --depth 1 --branch 7.0.12 https://github.com/juce-framework/JUCE.git JUCE
+git clone --depth 1 --branch v0.6.0 https://github.com/sdatkinson/NeuralAmpModelerCore.git ThirdParty/NeuralAmpModelerCore
+git clone --depth 1 --branch 3.4.1 https://gitlab.com/libeigen/eigen.git ThirdParty/eigen
 cmake -S . -B build -A x64
 cmake --build build --config Release --target OmniChain_VST3 OmniChain_Standalone
 ```
@@ -71,3 +102,5 @@ Adding an effect: add an entry to the `EffectType` enum and the `kInfos` table (
 write a class in `Effects.cpp`, and add it to `createEffect()`. The GUI and automation pick it up automatically.
 
 Licence note: built on JUCE 7 under its GPLv3 option, which is fine for personal use and for sharing the source under GPLv3.
+NAM support uses NeuralAmpModelerCore (MIT, Steven Atkinson) and Eigen (MPL2). NAM captures and IRs belong to their creators.
+Check each pack's terms before redistributing it.
