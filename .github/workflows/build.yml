@@ -15,7 +15,7 @@ jobs:
     name: DSP stress test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build and run engine test
         run: |
           g++ -std=c++17 -O2 tests/EngineTest.cpp Source/dsp/*.cpp -o enginetest
@@ -26,13 +26,13 @@ jobs:
     runs-on: windows-latest
     needs: dsp-tests
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Get JUCE 7.0.12
         run: git clone --depth 1 --branch 7.0.12 https://github.com/juce-framework/JUCE.git JUCE
 
       - name: Configure
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+        run: cmake -S . -B build -A x64
 
       - name: Build
         run: cmake --build build --config Release --target OmniChain_VST3 OmniChain_Standalone --parallel

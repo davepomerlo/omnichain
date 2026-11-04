@@ -47,11 +47,11 @@ That delay is part of the effect, not added processing latency.
 
 ## Building from source
 
-The included `OmniChain.vst3` was cross-compiled with llvm-mingw. To build it yourself with Visual Studio 2022:
+To build it yourself with Visual Studio (2022 or newer, with the "Desktop development with C++" workload):
 
 ```
 git clone --depth 1 --branch 7.0.12 https://github.com/juce-framework/JUCE.git JUCE
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake -S . -B build -A x64
 cmake --build build --config Release --target OmniChain_VST3 OmniChain_Standalone
 ```
 
