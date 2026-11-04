@@ -6,6 +6,11 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Publish a release with this version tag (e.g. v1.1). Leave empty for a plain build."
+        required: false
+        default: ""
 
 permissions:
   contents: write   # needed to publish a Release when a v* tag is pushed
@@ -53,9 +58,12 @@ jobs:
           name: OmniChain-Windows
           path: OmniChain-Windows
 
-      - name: Publish release (only for v* tags)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish release (v* tag push, or manual run with a version)
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.release || github.ref_name }}
+          name: OmniChain ${{ inputs.release || github.ref_name }}
+          target_commitish: ${{ github.sha }}
           files: OmniChain-Windows.zip
           generate_release_notes: true

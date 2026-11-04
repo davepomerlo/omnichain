@@ -61,7 +61,8 @@ Every push to `main` runs the DSP stress test, builds the plugin with Visual Stu
 and attaches **OmniChain-Windows** (VST3 + standalone + this README) to the run.
 Download it from the **Actions** tab → latest run → *Artifacts* (you need to be signed in).
 
-To publish a version anyone can download, create a tag such as `v1.0`. The zip then appears on the **Releases** page.
+To publish a version anyone can download: **Actions** tab → *Build OmniChain* → **Run workflow**, type a version such as `v1.1`, and press Run.
+(Pushing a git tag like `v1.1` does the same.) The zip then appears on the **Releases** page.
 
 Code layout: `Source/dsp/` is the JUCE-free DSP engine (effects, chain, parameter catalogue). `Source/Plugin*` is the JUCE wrapper and GUI.
 `tests/` holds an offline DSP stress test and a headless host test.
