@@ -1396,6 +1396,411 @@ struct CabIrFx final : Effect
         meter = 1.0f;
     }
 };
+// =====================================================================================
+// v1.2 effects
+// =====================================================================================
+inline uint32_t hash32 (uint32_t x) { x ^= x >> 16; x *= 0x7feb352dU; x ^= x >> 15; x *= 0x846ca68bU; x ^= x >> 16; return x; }
+inline float hash01 (int64_t i, uint32_t salt) { return float (hash32 ((uint32_t) i * 2654435761u ^ salt) >> 8) * (1.0f / 16777216.0f); }
+inline int wrap16 (int64_t i) { return (int) (((i % 16) + 16) % 16); }
+static const float kDivBeats[6] = { 1.0f, 0.5f, 1.0f / 3.0f, 0.25f, 1.0f / 6.0f, 0.125f };
+
+// Tempo grid: step index for each sample (host transport when playing, free-running otherwise)
+struct StepClock
+{
+    double freePos = 0.0;
+    inline int64_t step (const Context& ctx, int i, double beatsPerStep, double sr)
+    {
+        const double ppqPerSample = ctx.bpm / (60.0 * sr);
+        if (ctx.playing) return (int64_t) std::floor ((ctx.ppq + double (i) * ppqPerSample) / beatsPerStep);
+        freePos += ppqPerSample / beatsPerStep;
+        return (int64_t) std::floor (freePos);
+    }
+};
+
+// =====================================================================================
+struct WahFx final : Effect
+{
+    Svf f[2]; EnvFollower env; float pos = 0.5f, ph = 0.0f;
+    void reset() override { f[0].reset(); f[1].reset(); env.reset(); }
+    void process (float* L, float* R, int n, const float* v, const Context& ctx) override
+    {
+        static const float fLo[4] = { 420.0f, 380.0f, 300.0f, 160.0f }, fHi[4] = { 2200.0f, 2500.0f, 3300.0f, 1200.0f };
+        static const float qB[4] = { 6.5f, 4.5f, 3.0f, 6.0f }, lpMix[4] = { 0.25f, 0.15f, 0.1f, 0.35f };
+        static const float syncBeats[3] = { 1.0f, 0.5f, 0.25f };
+        const float depth = v[0] * 0.01f, reso = v[3] * 0.01f, speed = v[4], sens = v[5] * 0.01f;
+        const int mode = (int) v[1], model = std::max (0, std::min (3, (int) v[2]));
+        const float q = qB[model] * (0.5f + reso * 1.5f), kq = 1.0f / q;
+        env.setup (3.0f, clampf (400.0f / speed, 20.0f, 1000.0f), sr);
+        const float sensG = dbToGain (sens * 36.0f - 6.0f);
+        float rate = speed;
+        if (mode >= 3) { const float b = syncBeats[mode - 3]; rate = float (ctx.bpm / 60.0) / b; if (ctx.playing) { const double p = ctx.ppq / b; ph = float (p - std::floor (p)); } }
+        const float inc = rate / float (sr), k = 1.0f - onePoleCoef (6.0f, sr);
+        const float ratio = fHi[model] / fLo[model];
+        for (int i = 0; i < n; ++i)
+        {
+            float tgt = depth;
+            if (mode == 1) tgt = depth * (1.0f - std::exp (-env.tick ((L[i] + R[i]) * 0.5f) * sensG * 1.5f));
+            else if (mode >= 2) { ph += inc; if (ph >= 1) ph -= 1; tgt = depth * (0.5f + 0.5f * fastSin2Pi (ph)); }
+            pos += (tgt - pos) * k;
+            const float fc = fLo[model] * std::pow (ratio, pos);
+            const float g = fastTan (kPi * clampf (fc, 20.0f, float (sr) * 0.45f) / float (sr));
+            float* ch[2] = { L, R };
+            for (int c = 0; c < 2; ++c)
+            {
+                f[c].setG (g, q);
+                f[c].tick (ch[c][i]);
+                ch[c][i] = f[c].bp * kq * 3.6f + f[c].lp * lpMix[model] * 1.5f;
+            }
+        }
+        meter = pos;
+    }
+};
+
+// =====================================================================================
+struct FreezeFx final : Effect
+{
+    struct Grain { bool on = false; int buf = 0; float pos = 0, rate = 1; int len = 1, t = 0; float gl = 1, gr = 1, amp = 1; };
+    std::vector<float> rec[2]; int recMask = 0; int64_t w = 0;
+    std::vector<float> frz[2][2]; int frzLen[2] = { 0, 0 }; int cur = 0; bool have = false;
+    Grain g[12]; float hann[1025] = {}; int spawnCtr = 0, pending = -1, refr = 0, lastMode = -1, maxC = 1;
+    float pad = 0.0f; EnvFollower fast, slow; OnePole tone[2]; Rng rng { 31337u };
+    void prepare (double s, int b) override
+    {
+        Effect::prepare (s, b);
+        int sz = 1; while (sz < int (1.0 * sr)) sz <<= 1;
+        rec[0].assign ((size_t) sz, 0.0f); rec[1].assign ((size_t) sz, 0.0f); recMask = sz - 1;
+        maxC = int (0.62 * sr);
+        for (auto& bb : frz) for (auto& c : bb) c.assign ((size_t) maxC + 4, 0.0f);
+        for (int i = 0; i <= 1024; ++i) hann[i] = 0.5f - 0.5f * std::cos (k2Pi * float (i) / 1024.0f);
+        fast.setup (0.5f, 40.0f, sr); slow.setup (40.0f, 250.0f, sr);
+        reset();
+    }
+    void reset() override { for (auto& gg : g) gg.on = false; have = false; pad = 0; pending = -1; refr = 0; lastMode = -1; fast.reset(); slow.reset(); tone[0].reset(); tone[1].reset(); }
+    void capture (int C)
+    {
+        const int b = 1 - cur;
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < C; ++i) frz[b][c][(size_t) i] = rec[c][(size_t) ((w - C + i) & recMask)];
+        frzLen[b] = C; cur = b; have = true;
+    }
+    void process (float* L, float* R, int n, const float* v, const Context&) override
+    {
+        const int mode = (int) v[0];
+        const float blend = v[1] * 0.01f, shimmer = v[4] * 0.01f;
+        const int C = std::max (2048, std::min (maxC, int (v[2] * 0.001f * float (sr))));
+        const float kFade = 1.0f - std::exp (-1.0f / (v[3] * float (sr)));
+        tone[0].setHz (v[5], sr); tone[1].setHz (v[5], sr);
+        const int glen = std::max (512, C / 2), spawnEvery = std::max (64, glen / 3);
+        if (mode == 1 && lastMode != 1 && w > C) capture (C);
+        lastMode = mode;
+        const float target = (mode == 2 || ! have) ? 0.0f : 1.0f;
+        for (int i = 0; i < n; ++i)
+        {
+            rec[0][(size_t) (w & recMask)] = L[i]; rec[1][(size_t) (w & recMask)] = R[i]; ++w;
+            if (mode == 0)
+            {
+                const float x = std::max (std::fabs (L[i]), std::fabs (R[i])) + 1.0e-7f;
+                const float fd = gainToDb (fast.tick (x)), sd = gainToDb (slow.tick (x));
+                if (refr > 0) --refr;
+                if (fd > -50.0f && fd - sd > 8.0f && refr == 0 && pending < 0) { pending = C + int (0.05 * sr); refr = std::max (int (0.3 * sr), C); }
+                if (pending > 0 && --pending == 0) { capture (C); pending = -1; }
+            }
+            pad += (target - pad) * kFade;
+            float ol = 0, orr = 0;
+            if (have && pad > 1.0e-4f)
+            {
+                if (--spawnCtr <= 0)
+                {
+                    spawnCtr = spawnEvery;
+                    for (auto& gg : g)
+                        if (! gg.on)
+                        {
+                            gg.on = true; gg.t = 0; gg.buf = cur;
+                            gg.rate = (shimmer > 0 && rng.uni() < shimmer * 0.6f) ? 2.0f : 1.0f;
+                            gg.len = glen; gg.amp = gg.rate > 1.0f ? 0.6f : 1.0f;
+                            const float room = float (frzLen[cur]) - float (glen) * gg.rate - 2.0f;
+                            gg.pos = room > 0 ? rng.uni() * room : 0.0f;
+                            const float pan = 0.5f + 0.4f * rng.bi();
+                            gg.gl = std::sqrt (1.0f - pan) * 1.414f; gg.gr = std::sqrt (pan) * 1.414f;
+                            break;
+                        }
+                }
+                for (auto& gg : g)
+                {
+                    if (! gg.on) continue;
+                    const int i0 = (int) gg.pos; const float fr = gg.pos - float (i0);
+                    const auto& a = frz[gg.buf][0]; const auto& b = frz[gg.buf][1];
+                    const int lim = frzLen[gg.buf] - 1;
+                    const int i1 = std::min (i0 + 1, lim), ii = std::min (i0, lim);
+                    const float wv = hann[(gg.t * 1024) / gg.len] * gg.amp;
+                    ol += (a[(size_t) ii] + fr * (a[(size_t) i1] - a[(size_t) ii])) * wv * gg.gl;
+                    orr += (b[(size_t) ii] + fr * (b[(size_t) i1] - b[(size_t) ii])) * wv * gg.gr;
+                    gg.pos += gg.rate;
+                    if (++gg.t >= gg.len) gg.on = false;
+                }
+            }
+            const float pg = pad * blend * 0.8f;
+            L[i] += tone[0].lp (ol) * pg;
+            R[i] += tone[1].lp (orr) * pg;
+        }
+        meter = pad;
+    }
+};
+
+// =====================================================================================
+struct StepFilterFx final : Effect
+{
+    Svf f[2]; float cut = 0.5f, gate = 1.0f; StepClock clk;
+    void reset() override { f[0].reset(); f[1].reset(); }
+    void process (float* L, float* R, int n, const float* v, const Context& ctx) override
+    {
+        static const float pats[4][16] = {
+            { 0, .07f, .13f, .2f, .27f, .33f, .4f, .47f, .53f, .6f, .67f, .73f, .8f, .87f, .93f, 1 },
+            { 1, .93f, .87f, .8f, .73f, .67f, .6f, .53f, .47f, .4f, .33f, .27f, .2f, .13f, .07f, 0 },
+            { 0, .6f, .2f, .8f, .4f, 1, .3f, .7f, .1f, .9f, .5f, .6f, .2f, .8f, .3f, 1 },
+            { 0, 1, .5f, .75f, 0, .9f, .25f, .6f, 0, 1, .4f, .8f, .15f, .9f, .5f, .7f } };
+        static const float gates[3][16] = {
+            { 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0 },
+            { .25f, 1, .25f, 1, .25f, 1, .25f, 1, .25f, 1, .25f, 1, .25f, 1, 1, 1 },
+            { 1, 0, 1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0 } };
+        const double beats = kDivBeats[std::max (0, std::min (5, (int) v[0]))];
+        const int pat = (int) v[1];
+        const float base = v[2], range = v[3], q = 0.7f + v[4] * 0.12f, glide = v[5] * 0.01f;
+        const float stepSec = float (beats * 60.0 / std::max (20.0, ctx.bpm));
+        const float kc = 1.0f - std::exp (-1.0f / ((0.001f + glide * 0.9f * stepSec) * float (sr)));
+        const float kg = 1.0f - std::exp (-1.0f / ((0.002f + glide * 0.3f * stepSec) * float (sr)));
+        const float nyq = float (sr) * 0.45f;
+        const float comp = 1.0f / (1.0f + q * 0.08f);
+        for (int i = 0; i < n; ++i)
+        {
+            const int64_t st = clk.step (ctx, i, beats, sr);
+            const int s16 = wrap16 (st);
+            float val = 1.0f, gt = 1.0f;
+            if (pat < 4) val = pats[pat][s16];
+            else if (pat == 4) val = hash01 (st, 0xA5u);
+            else gt = gates[std::min (2, pat - 5)][s16];
+            cut += (val - cut) * kc;
+            gate += (gt - gate) * kg;
+            const float g = fastTan (kPi * clampf (base * std::exp2 (range * cut), 20.0f, nyq) / float (sr));
+            for (int c = 0; c < 2; ++c)
+            {
+                float* ch = c ? R : L;
+                f[c].setG (g, q); f[c].tick (ch[i]);
+                ch[i] = f[c].lp * gate * comp;
+            }
+        }
+        meter = cut;
+    }
+};
+
+// =====================================================================================
+struct ArpFx final : Effect
+{
+    GrainShifter sh[2]; float semi = 0.0f, last[2] = { 0, 0 }; Smooth win; StepClock clk;
+    void prepare (double s, int b) override
+    {
+        Effect::prepare (s, b);
+        for (auto& x : sh) x.init (int (0.09 * sr));
+        win.setTime (40.0f, sr); win.reset (0.035f * float (sr));
+        reset();
+    }
+    void reset() override { for (auto& x : sh) x.clear(); last[0] = last[1] = 0; }
+    void process (float* L, float* R, int n, const float* v, const Context& ctx) override
+    {
+        static const float pats[5][8] = {
+            { 0, 12, 24, 12, 0, 12, 24, 12 }, { 0, 4, 7, 12, 16, 12, 7, 4 }, { 0, 3, 7, 12, 15, 12, 7, 3 },
+            { 0, 7, 12, 19, 24, 19, 12, 7 }, { 24, 19, 16, 12, 7, 4, 0, -5 } };
+        static const float penta[9] = { 0, 2, 4, 7, 9, 12, 14, 16, 19 };
+        const double beats = kDivBeats[std::max (0, std::min (5, (int) v[0]))];
+        const int pat = (int) v[1];
+        const float oct = (v[2] - 1.0f) * 12.0f;
+        const float stepSec = float (beats * 60.0 / std::max (20.0, ctx.bpm));
+        const float kg = 1.0f - std::exp (-1.0f / ((0.001f + v[3] * 0.01f * 0.8f * stepSec) * float (sr)));
+        win.tgt = v[4] * 0.001f * float (sr);
+        const float fb = v[5] * 0.01f;
+        for (int i = 0; i < n; ++i)
+        {
+            const int64_t st = clk.step (ctx, i, beats, sr);
+            const int s8 = (int) (((st % 8) + 8) % 8);
+            const float tgt = oct + (pat < 5 ? pats[pat][s8] : penta[(int) (hash01 (st, 0x5Eu) * 8.999f)]);
+            semi += (tgt - semi) * kg;
+            const float ratio = std::exp2 (semi / 12.0f), wn = win.next();
+            for (int c = 0; c < 2; ++c)
+            {
+                float* ch = c ? R : L;
+                const float y = sh[c].tick (ch[i] + fb * last[c], ratio, wn);
+                last[c] = fastTanh (y);
+                ch[i] = y;
+            }
+        }
+    }
+};
+
+// =====================================================================================
+struct StringsFx final : Effect
+{
+    static constexpr int NS = 6;
+    DelayLine dl[NS]; float lp[NS] = {}, len[NS] = {}, gfb[NS] = {}, pan[NS][2] = {};
+    OnePole exHP; DcBlock dc[2]; float lastSig[5] = { -1, -1, -1, -1, -1 };
+    void prepare (double s, int b) override
+    {
+        Effect::prepare (s, b);
+        for (auto& d : dl) d.init (int (sr / 25.0) + 8);
+        exHP.setHz (150.0f, sr); dc[0].setup (sr); dc[1].setup (sr);
+        for (auto& x : lastSig) x = -1;
+        reset();
+    }
+    void reset() override { for (auto& d : dl) d.clear(); for (auto& x : lp) x = 0; exHP.reset(); dc[0].reset(); dc[1].reset(); }
+    void process (float* L, float* R, int n, const float* v, const Context&) override
+    {
+        static const float chords[7][NS] = {
+            { 0, 12, 24, 0, 12, 24 }, { 0, 7, 12, 16, 19, 24 }, { 0, 7, 12, 15, 19, 24 }, { 0, 5, 7, 12, 17, 19 },
+            { 0, 7, 12, 19, 24, 31 }, { 0, 4, 7, 11, 12, 16 }, { 0, 7, 12, 12, 19, 24 } };
+        if (v[0] != lastSig[0] || v[1] != lastSig[1] || v[2] != lastSig[2] || v[4] != lastSig[3] || v[5] != lastSig[4])
+        {
+            const int chord = std::max (0, std::min (6, (int) v[1]));
+            const float root = 36.0f + v[0] + 12.0f * v[5];
+            const float spread = v[4] * 0.01f;
+            for (int s = 0; s < NS; ++s)
+            {
+                const float cents = (s & 1 ? 1.0f : -1.0f) * spread * 6.0f * float (1 + s % 3) / 3.0f;
+                const float midi = root + chords[chord][s] + cents * 0.01f;
+                const float f = 440.0f * std::exp2 ((midi - 69.0f) / 12.0f);
+                len[s] = std::max (2.0f, float (sr) / f - 1.0f);
+                gfb[s] = std::pow (10.0f, -3.0f * (len[s] / float (sr)) / v[2]);
+                const float p = 0.5f + (s & 1 ? 0.5f : -0.5f) * spread * (0.4f + 0.2f * float (s % 3));
+                pan[s][0] = std::sqrt (1.0f - p); pan[s][1] = std::sqrt (p);
+            }
+            lastSig[0] = v[0]; lastSig[1] = v[1]; lastSig[2] = v[2]; lastSig[3] = v[4]; lastSig[4] = v[5];
+        }
+        const float a = std::exp (-k2Pi * 1500.0f * std::pow (10.0f, v[3] * 0.01f) / float (sr));
+        const float outG = 0.6f;
+        for (int i = 0; i < n; ++i)
+        {
+            const float ex = exHP.hp ((L[i] + R[i]) * 0.5f) * 0.12f;
+            float ol = 0, orr = 0;
+            for (int s = 0; s < NS; ++s)
+            {
+                const float y = dl[s].read (len[s]);
+                lp[s] = y + a * (lp[s] - y);
+                dl[s].push (ex + fastTanh (lp[s] * gfb[s]));
+                ol += y * pan[s][0]; orr += y * pan[s][1];
+            }
+            L[i] = dc[0].tick (ol) * outG;
+            R[i] = dc[1].tick (orr) * outG;
+        }
+    }
+};
+
+// =====================================================================================
+struct SpiralFx final : Effect
+{
+    DelayLine dl[2]; GrainShifter sh[2]; OnePole tone[2], hp[2]; Smooth time;
+    void prepare (double s, int b) override
+    {
+        Effect::prepare (s, b);
+        for (auto& d : dl) d.init (int (1.6 * sr) + 64);
+        for (auto& x : sh) x.init (int (0.06 * sr));
+        hp[0].setHz (90.0f, sr); hp[1].setHz (90.0f, sr);
+        time.setTime (150.0f, sr); time.reset (0.32f * float (sr));
+        reset();
+    }
+    void reset() override { for (auto& d : dl) d.clear(); for (auto& x : sh) x.clear(); for (int c = 0; c < 2; ++c) { tone[c].reset(); hp[c].reset(); } }
+    void process (float* L, float* R, int n, const float* v, const Context& ctx) override
+    {
+        static const float syncBeats[5] = { 2.0f, 1.0f, 0.75f, 0.5f, 0.25f };
+        static const float rl[6] = { 0.5f, 0.6674f, 1.0087f, 1.4983f, 2.0f, 2.0f };
+        static const float rr[6] = { 0.5f, 0.6674f, 0.9913f, 1.4983f, 2.0f, 0.5f };
+        const int sync = (int) v[1], iv = std::max (0, std::min (5, (int) v[2]));
+        float ms = v[0];
+        if (sync > 0) ms = syncBeats[sync - 1] * 60000.0f / float (ctx.bpm);
+        time.tgt = clampf (ms, 20.0f, 1500.0f) * 0.001f * float (sr);
+        const float fb = v[3] * 0.01f, spin = v[5] * 0.01f;
+        tone[0].setHz (v[4], sr); tone[1].setHz (v[4], sr);
+        const float win = 0.05f * float (sr);
+        for (int i = 0; i < n; ++i)
+        {
+            const float d = time.next();
+            const float yl = dl[0].read (d), yr = dl[1].read (d);
+            const float fl = lerp (yl, yr, spin), fr = lerp (yr, yl, spin);
+            const float sl = sh[0].tick (hp[0].hp (tone[0].lp (fl)), rl[iv], win);
+            const float sr2 = sh[1].tick (hp[1].hp (tone[1].lp (fr)), rr[iv], win);
+            dl[0].push (L[i] + fb * fastTanh (sl));
+            dl[1].push (R[i] + fb * fastTanh (sr2));
+            L[i] = yl; R[i] = yr;
+        }
+    }
+};
+
+// =====================================================================================
+struct GhostVerbFx final : Effect
+{
+    ReverbFx verb; EnvFollower env; float wetG = 0; std::vector<float> gains;
+    void prepare (double s, int b) override { Effect::prepare (s, b); verb.prepare (s, b); gains.assign ((size_t) b + 1, 0.0f); reset(); }
+    void reset() override { verb.reset(); env.reset(); wetG = 0; }
+    void process (float* L, float* R, int n, const float* v, const Context& ctx) override
+    {
+        env.setup (3.0f, v[3], sr);
+        const float duck = v[2] * 0.01f;
+        const float kUp = 1.0f - std::exp (-1.0f / ((0.02f + v[4] * 0.01f * 2.5f) * float (sr)));
+        const float kDown = 1.0f - std::exp (-1.0f / (0.03f * float (sr)));
+        float m = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            const float e = env.tick (std::max (std::fabs (L[i]), std::fabs (R[i]))) + 1.0e-7f;
+            const float tgt = 1.0f - duck * clampf ((gainToDb (e) + 50.0f) / 35.0f, 0.0f, 1.0f);
+            wetG += (tgt - wetG) * (tgt > wetG ? kUp : kDown);
+            gains[(size_t) i] = wetG; m = wetG;
+        }
+        const float rv[6] = { v[0], v[1], 45.0f, 15.0f, 50.0f, v[5] };
+        verb.process (L, R, n, rv, ctx);
+        for (int i = 0; i < n; ++i) { L[i] *= gains[(size_t) i] * 2.2f; R[i] *= gains[(size_t) i] * 2.2f; }
+        meter = m;
+    }
+};
+
+// =====================================================================================
+struct FeedbackFx final : Effect
+{
+    GrainShifter sh; EnvFollower env, fast, slow; OnePole t1, t2; float bloom = 0, ph = 0; int refr = 0;
+    void prepare (double s, int b) override
+    {
+        Effect::prepare (s, b);
+        sh.init (int (0.06 * sr));
+        env.setup (8.0f, 150.0f, sr); fast.setup (0.5f, 30.0f, sr); slow.setup (30.0f, 300.0f, sr);
+        reset();
+    }
+    void reset() override { sh.clear(); env.reset(); fast.reset(); slow.reset(); t1.reset(); t2.reset(); bloom = 0; refr = 0; }
+    void process (float* L, float* R, int n, const float* v, const Context&) override
+    {
+        static const float harm[4] = { 1.0f, 2.0f, 3.0f, 4.0f };
+        const float h = harm[std::max (0, std::min (3, (int) v[0]))];
+        const float kUp = 1.0f / (v[1] * float (sr)), kDown = 1.0f - std::exp (-1.0f / (0.08f * float (sr)));
+        const float amt = v[2] * 0.01f, thr = v[3], wob = v[5] * 0.01f;
+        t1.setHz (v[4], sr); t2.setHz (v[4], sr);
+        const float win = 0.04f * float (sr), inc = 5.5f / float (sr);
+        const int refrS = int (0.1 * sr);
+        for (int i = 0; i < n; ++i)
+        {
+            const float m = (L[i] + R[i]) * 0.5f;
+            const float e = env.tick (m);
+            const float fd = gainToDb (fast.tick (m) + 1.0e-7f), sd = gainToDb (slow.tick (m) + 1.0e-7f);
+            if (refr > 0) --refr;
+            if (fd - sd > 9.0f && refr == 0) { bloom *= 0.15f; refr = refrS; }
+            if (gainToDb (e + 1.0e-7f) > thr) bloom = std::min (1.0f, bloom + kUp);
+            else bloom += (0.0f - bloom) * kDown;
+            ph += inc; if (ph >= 1) ph -= 1;
+            const float ratio = h * std::exp2 (wob * 0.25f * fastSin2Pi (ph) / 12.0f);
+            const float c = m * std::min (40.0f, 0.25f / (e + 1.0e-5f));
+            float s = sh.tick (c, ratio, win);
+            s = fastTanh (t2.lp (t1.lp (s)) * 1.5f) * 0.6f;
+            const float fbs = s * bloom * bloom * amt;
+            L[i] += fbs; R[i] += fbs;
+        }
+        meter = bloom;
+    }
+};
+
 } // namespace
 
 std::unique_ptr<Effect> createEffect (int type)
@@ -1434,6 +1839,14 @@ std::unique_ptr<Effect> createEffect (int type)
         case FxImager:     e.reset (new ImagerFx()); break;
         case FxCabIR:      e.reset (new CabIrFx()); break;
         case FxNam:        e = createNamEffect(); break;
+        case FxWah:        e.reset (new WahFx()); break;
+        case FxFreeze:     e.reset (new FreezeFx()); break;
+        case FxStepFilter: e.reset (new StepFilterFx()); break;
+        case FxArp:        e.reset (new ArpFx()); break;
+        case FxStrings:    e.reset (new StringsFx()); break;
+        case FxSpiral:     e.reset (new SpiralFx()); break;
+        case FxGhostVerb:  e.reset (new GhostVerbFx()); break;
+        case FxFeedback:   e.reset (new FeedbackFx()); break;
         default:           e.reset (new NoneFx()); type = FxNone; break;
     }
     e->type = type;

@@ -1,6 +1,6 @@
 # OmniChain: modular multi-FX (VST3)
 
-An 8-slot effects chain where any slot can hold any of 29 built-in effects, plus a **Cab IR loader**
+An 8-slot effects chain where any slot can hold any of 37 built-in effects, plus a **Cab IR loader**
 and a **Neural Amp Modeler (NAM) loader** for free captures of real amps, pedals and cabinets. You can reorder the chain by dragging,
 and the plugin reports **0 samples of latency**. A full 8-slot chain uses about 1–2 % of one CPU core.
 
@@ -41,6 +41,23 @@ Set the audio device under *Options → Audio/MIDI settings*.
 * NAM is the heaviest effect: about 1–10 % of a CPU core per capture, depending on its size. Everything else stays light.
 * Projects and presets remember the file *locations*. If you move or rename the files, the slot shows "File not found". Click Load to point it at the new place.
 
+## The 1.2 effects in one line each
+
+* **Wah Pedal:** Mode *Pedal* = you move it. *Auto* follows your picking, *LFO* sweeps freely, *Sync* sweeps in time with the song.
+  In Auto/LFO/Sync, the Pedal knob sets how far the sweep travels.
+* **Freeze Pad:** *Auto* grabs each new note and holds it as a pad. *Hold* freezes whatever is ringing at that moment
+  (automate it, or map it to a footswitch). *Off* fades the pad away.
+* **Step Filter:** 16-step filter patterns (rise, fall, zigzag, random) and trance-gate rhythms, locked to the song tempo.
+* **Harmonic Arp:** your playing is pitch-shifted through an arpeggio (octaves, major, minor, fifths, cascade, random) on the beat.
+* **Sympathetic Strings:** six virtual strings tuned to a key and chord. They ring in sympathy with your notes, like a sitar or harp.
+* **Spiral Delay:** each echo is pitch-shifted again, climbing or falling forever. *Spin* bounces the spiral between speakers.
+* **Ghost Verb:** a huge reverb that ducks out of the way while you play and blooms when you stop. *Swell* slows the bloom.
+* **Amp Feedback:** hold a note and it blooms into singing octave (or fifth) feedback. Re-picking resets it, just like a real amp.
+
+### Using an expression pedal with the Wah in FL Studio
+Wiggle the Wah's **Pedal** knob, then choose **Tools → Last tweaked → Link to controller…** in FL Studio and move your MIDI
+expression pedal. Any other knob can be linked the same way, for example Freeze Pad's *Mode* on a footswitch.
+
 ## Using it
 
 * **Pick an effect:** use the dropdown on any slot's header.
@@ -66,6 +83,7 @@ Set the audio device under *Options → Audio/MIDI settings*.
 | Time & Space | Delay (digital, analog, tape, ping-pong, **reverse**; host sync), Reverb (8-line FDN + **shimmer**), Spring Reverb |
 | Creative | Bitcrusher, **Glitch Grid** (tempo-locked stutter / reverse / tape-stop), **Granular Cloud** |
 | Utility | Stereo Imager (width, mono-bass, Haas, pan) |
+| New in 1.2 | **Wah Pedal** (Cry Baby, Vox, Wide, Bass; pedal, auto, LFO or tempo sweep), **Freeze Pad**, **Step Filter**, **Harmonic Arp**, **Sympathetic Strings**, **Spiral Delay**, **Ghost Verb**, **Amp Feedback** |
 | Loaders | **NAM Capture** (Neural Amp Modeler `.nam`), **Cab IR Loader** (`.wav/.aif/.flac`, zero-latency partitioned convolution) |
 
 ### About "zero latency"

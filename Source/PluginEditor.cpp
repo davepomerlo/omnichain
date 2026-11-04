@@ -578,7 +578,7 @@ void OmniChainEditor::paint (Graphics& g)
     g.drawText ("OMNICHAIN", 20, 14, 260, 32, Justification::centredLeft);
     g.setFont (Font (12.0f));
     g.setColour (ocui::textDim);
-    g.drawText ("modular multi-fx  |  31 effects + IR & NAM loading  |  0 samples latency", 22, 46, 360, 16, Justification::centredLeft);
+    g.drawText ("modular multi-fx  |  39 effects incl. IR & NAM loaders  |  0 samples latency", 22, 46, 360, 16, Justification::centredLeft);
 
     // meters
     auto drawMeter = [&] (int x, float lvl, const char* lbl)

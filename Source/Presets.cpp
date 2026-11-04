@@ -121,6 +121,51 @@ const std::vector<PresetDef>& getFactoryPresets()
             { FxChorus, 50, 0, { 0.25f, 60, 14, 4, 100, 10000 } },
             { FxImager, 100, 0, { 160, 150, 12, 0 } },
             { FxReverb, 40, 0, { 80, 4.5f, 45, 30, 60, 10 } } } },
+        // ---- v1.2 showcase presets ----
+        { "Wah Funk Machine", {
+            { FxCompressor, 100, 0, { -26, 6, 2, 100, 6, 20 } },
+            { FxWah, 100, 0, { 100, 1, 0, 60, 3, 65 } },
+            { FxAmp, 100, 0, { 15, 5, 5, 6.5f, 6, 1 } },
+            { FxSpring, 25, 0, { 2, 4000, 60, 40, 50 } } } },
+
+        { "Wah Solo (automate Pedal)", {
+            { FxWah, 100, 0, { 50, 0, 0, 55, 2, 60 } },
+            { FxDistortion, 100, 0, { 55, 55, 1, 0, 2, -17 } },
+            { FxAmp, 100, 0, { 45, 5, 6, 5.5f, 5, 2 } },
+            { FxDelay, 25, 0, { D, 7, 35, 4500, 2, 25 } } } },
+
+        { "Frozen Lake", {
+            { FxFreeze, 100, 0, { 0, 70, 300, 2.5f, 30, 5000 } },
+            { FxChorus, 40, 0, { 0.3f, 50, 12, 3, 100, 9000 } },
+            { FxGhostVerb, 50, 0, { 85, 8, 70, 500, 50, 30 } } } },
+
+        { "Spiral Staircase", {
+            { FxOverdrive, 100, 0, { 15, 55, 500, 30, 20, -9 } },
+            { FxAmp, 100, 0, { 30, 5, 5.5f, 6, 5.5f, 2 } },
+            { FxSpiral, 45, 0, { D, 2, 4, 60, 6000, 60 } },
+            { FxReverb, 25, 0, { 70, 3, 45, 20, 40, 0 } } } },
+
+        { "Sitar Garden", {
+            { FxStrings, 45, 0, { 4, 6, 4, 70, 50, 1 } },
+            { FxChorus, 35, 0, { 0.4f, 40, 10, 2, 80, 10000 } },
+            { FxReverb, 30, 0, { 65, 2.8f, 45, 20, 35, 0 } } } },
+
+        { "Arp Machine", {
+            { FxArp, 55, 0, { 3, 1, 1, 10, 30, 0 } },
+            { FxDelay, 30, 0, { D, 8, 40, 5000, 3, 15 } },
+            { FxReverb, 25, 0, { 60, 2.5f, 45, 15, 35, 0 } } } },
+
+        { "Step Pulse", {
+            { FxStepFilter, 100, 0, { 3, 5, 400, 3.5f, 40, 15 } },
+            { FxDelay, 25, 0, { D, 8, 35, 6000, 3, 10 } },
+            { FxReverb, 20, 0, { 55, 2, 45, 10, 30, 0 } } } },
+
+        { "Feedback Hero", {
+            { FxDistortion, 100, 0, { 65, 50, 0, 0, 2, -17 } },
+            { FxAmp, 100, 0, { 70, 5.5f, 5.5f, 6, 6, 3 } },
+            { FxFeedback, 100, 0, { 1, 1.2f, 70, -42, 2500, 25 } },
+            { FxDelay, 22, 0, { D, 4, 30, 4000, 1, 20 } },
+            { FxReverb, 20, 0, { 60, 2.2f, 50, 15, 30, 0 } } } },
     };
     return presets;
 }

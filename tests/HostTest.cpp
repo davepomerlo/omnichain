@@ -172,6 +172,19 @@ int main (int argc, char** argv)
         snapshot (p, outDir + "/omnichain_nam_ir.png");
     }
 
+
+    // 7. showcase: all v1.2 effects in one chain
+    {
+        const int showcase[8] = { oc::FxWah, oc::FxFeedback, oc::FxFreeze, oc::FxStepFilter, oc::FxArp, oc::FxStrings, oc::FxSpiral, oc::FxGhostVerb };
+        for (int s = 0; s < 8; ++s) p.setSlotType (s, showcase[s], true);
+        p.currentPresetName = "v1.2 showcase";
+        p.engine.service(); bool fin = true; runAudio (p, 8, bs, 2, sr, fin); p.engine.service();
+        const float pk = runAudio (p, 200, bs, 2, sr, fin);
+        std::printf ("showcase chain peak %.2f\n", pk);
+        CHECK (fin && pk < 4.0f, "showcase chain");
+        snapshot (p, outDir + "/omnichain_v12.png");
+    }
+
     std::printf ("\n%s (%d failures)\n", failures ? "FAILED" : "ALL HOST TESTS OK", failures);
     return failures ? 1 : 0;
 }

@@ -52,6 +52,8 @@ enum EffectType
     FxImager,
     // Added in 1.1 (appended so saved projects keep their effect numbers)
     FxCabIR, FxNam,
+    // Added in 1.2
+    FxWah, FxFreeze, FxStepFilter, FxArp, FxStrings, FxSpiral, FxGhostVerb, FxFeedback,
     NumEffectTypes
 };
 

@@ -26,6 +26,18 @@ static const char* const kRingShapes[] = { "Sine", "Triangle", "Square" };
 static const char* const kDelaySync[]  = { "Off", "1/1", "1/2", "1/2D", "1/4", "1/4D", "1/4T", "1/8", "1/8D", "1/8T", "1/16", "1/16T", "1/32" };
 static const char* const kDelayModes[] = { "Digital", "Analog", "Tape", "Ping-Pong", "Reverse" };
 static const char* const kGlitchDiv[]  = { "1/4", "1/8", "1/8T", "1/16", "1/16T", "1/32" };
+static const char* const kWahMode[]    = { "Pedal", "Auto", "LFO", "Sync 1/4", "Sync 1/8", "Sync 1/16" };
+static const char* const kWahModel[]   = { "Cry Baby", "Vox", "Wide", "Bass" };
+static const char* const kFreezeMode[] = { "Auto", "Hold", "Off" };
+static const char* const kStepPat[]    = { "Rise", "Fall", "Zigzag", "Jump", "Random", "Trance Gate", "Offbeat Gate", "Euclid 5/8" };
+static const char* const kArpPat[]     = { "Octaves", "Major", "Minor", "Fifths", "Cascade", "Random" };
+static const char* const kOct3[]       = { "-1 oct", "0", "+1 oct" };
+static const char* const kKeys[]       = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+static const char* const kStrChord[]   = { "Octaves", "Major", "Minor", "Sus4", "Power", "Maj7", "Drone" };
+static const char* const kStrOct[]     = { "Low", "Mid", "High" };
+static const char* const kSpiralSync[] = { "Off", "1/2", "1/4", "1/8D", "1/8", "1/16" };
+static const char* const kSpiralInt[]  = { "Oct Down", "5th Down", "Detune", "5th Up", "Oct Up", "Up + Down" };
+static const char* const kFbHarm[]     = { "Unison", "Octave", "Oct + 5th", "2 Octaves" };
 static const char* const kOffOn[]      = { "Off", "On" };
 static const char* const kGrainPitch[] = { "Unison", "Oct Up", "Oct Down", "Oct Random", "Fifths", "Detune" };
 
@@ -134,6 +146,31 @@ static const EffectInfo kInfos[NumEffectTypes] =
     { FxNam, "NAM Capture", "NAM", CatDrive, 1.0f, "Neural Amp Modeler: real amps and pedals captured by AI (.nam files).",
       { P ("Input", -24, 24, 0, Lin, "dB"), P ("Output", -24, 24, 0, Lin, "dB"), P ("Bass", -12, 12, 0, Lin, "dB"),
         P ("Mid", -12, 12, 0, Lin, "dB"), P ("Treble", -12, 12, 0, Lin, "dB"), C ("Normalize", kOffOn, 1) } },
+
+    { FxWah, "Wah Pedal", "WAH", CatFilter, 1.0f, "Rock the Pedal knob with an expression pedal, or let it sweep by itself.",
+      { P ("Pedal", 0, 100, 50, Lin, "%"), C ("Mode", kWahMode, 0), C ("Model", kWahModel, 0),
+        P ("Resonance", 0, 100, 50, Lin, "%"), P ("Speed", 0.1f, 10, 2, Log, "Hz"), P ("Sensitivity", 0, 100, 60, Lin, "%") } },
+    { FxFreeze, "Freeze Pad", "FREEZE", CatCreative, 1.0f, "Captures your notes and sustains them forever as an ambient pad under your playing.",
+      { C ("Mode", kFreezeMode, 0), P ("Blend", 0, 100, 60, Lin, "%"), P ("Capture", 80, 600, 250, Log, "ms"),
+        P ("Fade", 0.05f, 8, 1.5f, Log, "s"), P ("Shimmer", 0, 100, 0, Lin, "%"), P ("Tone", 500, 16000, 6000, Log, "Hz") } },
+    { FxStepFilter, "Step Filter", "STEP", CatFilter, 1.0f, "Tempo-synced 16-step filter and trance-gate sequencer.",
+      { C ("Division", kGlitchDiv, 3), C ("Pattern", kStepPat, 0), P ("Base", 80, 4000, 300, Log, "Hz"),
+        P ("Range", 0, 6, 3.5f, Lin, "oct"), P ("Resonance", 0, 100, 55, Lin, "%"), P ("Glide", 0, 100, 25, Lin, "%") } },
+    { FxArp, "Harmonic Arp", "ARP", CatPitch, 0.5f, "Arpeggiates your playing through musical intervals in time with the song.",
+      { C ("Division", kGlitchDiv, 3), C ("Pattern", kArpPat, 1), C ("Octave", kOct3, 1),
+        P ("Glide", 0, 100, 10, Lin, "%"), P ("Window", 15, 80, 35, Log, "ms"), P ("Feedback", 0, 80, 0, Lin, "%") } },
+    { FxStrings, "Sympathetic Strings", "STRINGS", CatCreative, 0.4f, "Six virtual strings tuned to a chord ring along with whatever you play.",
+      { C ("Key", kKeys, 4), C ("Chord", kStrChord, 1), P ("Decay", 0.2f, 10, 3, Log, "s"),
+        P ("Brightness", 0, 100, 55, Lin, "%"), P ("Spread", 0, 100, 60, Lin, "%"), C ("Octave", kStrOct, 1) } },
+    { FxSpiral, "Spiral Delay", "SPIRAL", CatTime, 0.4f, "Every repeat climbs or falls in pitch - endless staircases of echoes.",
+      { P ("Time", 20, 1500, 320, Log, "ms"), C ("Sync", kSpiralSync, 0), C ("Interval", kSpiralInt, 4),
+        P ("Feedback", 0, 95, 55, Lin, "%"), P ("Tone", 800, 16000, 7000, Log, "Hz"), P ("Spin", 0, 100, 50, Lin, "%") } },
+    { FxGhostVerb, "Ghost Verb", "GHOST", CatTime, 0.5f, "A reverb that hides while you play and blooms the moment you stop.",
+      { P ("Size", 0, 100, 70, Lin, "%"), P ("Decay", 0.5f, 20, 5, Log, "s"), P ("Duck", 0, 100, 80, Lin, "%"),
+        P ("Recovery", 30, 3000, 400, Log, "ms"), P ("Swell", 0, 100, 40, Lin, "%"), P ("Shimmer", 0, 100, 0, Lin, "%") } },
+    { FxFeedback, "Amp Feedback", "FEEDBK", CatCreative, 1.0f, "Held notes bloom into singing harmonic feedback, like standing in front of a loud amp.",
+      { C ("Harmonic", kFbHarm, 1), P ("Bloom", 0.2f, 6, 1.5f, Log, "s"), P ("Amount", 0, 100, 60, Lin, "%"),
+        P ("Threshold", -60, -10, -40, Lin, "dB"), P ("Tone", 500, 8000, 2500, Log, "Hz"), P ("Wobble", 0, 100, 25, Lin, "%") } },
 };
 
 const EffectInfo& getInfo (int type)
