@@ -38,6 +38,11 @@ static const char* const kStrOct[]     = { "Low", "Mid", "High" };
 static const char* const kSpiralSync[] = { "Off", "1/2", "1/4", "1/8D", "1/8", "1/16" };
 static const char* const kSpiralInt[]  = { "Oct Down", "5th Down", "Detune", "5th Up", "Oct Up", "Up + Down" };
 static const char* const kFbHarm[]     = { "Unison", "Octave", "Oct + 5th", "2 Octaves" };
+static const char* const kSynthWave[]  = { "Saw", "Square", "Organ", "Sub Sine" };
+static const char* const kSynthOct[]   = { "-2 oct", "-1 oct", "0", "+1 oct" };
+static const char* const kBarberMode[] = { "Flange Up", "Flange Down", "Phase Up", "Phase Down" };
+static const char* const kRadioBand[]  = { "AM Radio", "Telephone", "Walkie-Talkie", "Gramophone" };
+static const char* const kOrbitPath[]  = { "Clockwise", "Counter-CW", "Pendulum" };
 static const char* const kOffOn[]      = { "Off", "On" };
 static const char* const kGrainPitch[] = { "Unison", "Oct Up", "Oct Down", "Oct Random", "Fifths", "Detune" };
 
@@ -171,6 +176,28 @@ static const EffectInfo kInfos[NumEffectTypes] =
     { FxFeedback, "Amp Feedback", "FEEDBK", CatCreative, 1.0f, "Held notes bloom into singing harmonic feedback, like standing in front of a loud amp.",
       { C ("Harmonic", kFbHarm, 1), P ("Bloom", 0.2f, 6, 1.5f, Log, "s"), P ("Amount", 0, 100, 60, Lin, "%"),
         P ("Threshold", -60, -10, -40, Lin, "dB"), P ("Tone", 500, 8000, 2500, Log, "Hz"), P ("Wobble", 0, 100, 25, Lin, "%") } },
+
+    { FxTapEnsemble, "Tap Ensemble", "TAPS", CatMod, 0.4f, "Up to 8 panned mono delay taps: huge, warble-free chorus (Holdsworth style).",
+      { P ("Taps", 2, 8, 8, Int, ""), P ("Start", 5, 40, 15, Lin, "ms"), P ("Spacing", 1, 15, 5, Lin, "ms"),
+        P ("Spread", 0, 100, 100, Lin, "%"), P ("Mod", 0, 100, 10, Lin, "%"), P ("Tone", 1000, 20000, 9000, Log, "Hz") } },
+    { FxSynth, "Guitar Synth", "SYNTH", CatPitch, 0.5f, "Tracks the note you play and drives a synth voice - play single notes.",
+      { C ("Wave", kSynthWave, 0), C ("Octave", kSynthOct, 2), P ("Cutoff", 200, 12000, 2500, Log, "Hz"),
+        P ("Env Amount", 0, 100, 50, Lin, "%"), P ("Glide", 0, 300, 20, Sq, "ms"), P ("Attack", 1, 800, 5, Log, "ms") } },
+    { FxBarber, "Barber Pole", "BARBER", CatMod, 1.0f, "An endlessly rising (or falling) flanger / phaser - the Shepard-tone illusion.",
+      { C ("Mode", kBarberMode, 2), P ("Rate", 0.02f, 2, 0.15f, Log, "Hz"), P ("Range", 1, 12, 6, Lin, "ms"),
+        P ("Feedback", 0, 90, 50, Lin, "%"), P ("Stereo", 0, 100, 50, Lin, "%"), NONE } },
+    { FxRadio, "Radio Tuner", "RADIO", CatCreative, 1.0f, "Old radio, phone or gramophone - drift off-station for static and whistles.",
+      { C ("Band", kRadioBand, 0), P ("Detune", 0, 100, 15, Lin, "%"), P ("Static", 0, 100, 30, Lin, "%"),
+        P ("Scan", 0, 100, 20, Lin, "%"), P ("Drive", 0, 100, 30, Lin, "%"), NONE } },
+    { FxOrbit, "Orbit", "ORBIT", CatMod, 1.0f, "Your sound circles around your head with Doppler shift and head shadow.",
+      { P ("Speed", 0.02f, 5, 0.4f, Log, "Hz"), C ("Path", kOrbitPath, 0), P ("Doppler", 0, 100, 50, Lin, "%"),
+        P ("Shadow", 0, 100, 50, Lin, "%"), P ("Width", 0, 100, 80, Lin, "%"), NONE } },
+    { FxMelt, "Melt", "MELT", CatPitch, 1.0f, "Every note sags in pitch and darkens, like a tape left in the sun.",
+      { P ("Sag", 0, 12, 2, Lin, "st"), P ("Time", 0.1f, 6, 1.5f, Log, "s"), P ("Wobble", 0, 100, 30, Lin, "%"),
+        P ("Dark", 0, 100, 40, Lin, "%"), P ("Retrigger", 3, 24, 9, Lin, "dB"), NONE } },
+    { FxChaos, "Chaos Echo", "CHAOS", CatTime, 0.4f, "Four echoes steered by a chaotic attractor - never the same twice.",
+      { P ("Time", 50, 1500, 400, Log, "ms"), P ("Chaos", 0, 100, 40, Lin, "%"), P ("Speed", 0.05f, 5, 0.5f, Log, "Hz"),
+        P ("Feedback", 0, 95, 55, Lin, "%"), P ("Tone", 800, 16000, 5000, Log, "Hz"), P ("Spread", 0, 100, 80, Lin, "%") } },
 };
 
 const EffectInfo& getInfo (int type)

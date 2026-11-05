@@ -166,6 +166,75 @@ const std::vector<PresetDef>& getFactoryPresets()
             { FxFeedback, 100, 0, { 1, 1.2f, 70, -42, 2500, 25 } },
             { FxDelay, 22, 0, { D, 4, 30, 4000, 1, 20 } },
             { FxReverb, 20, 0, { 60, 2.2f, 50, 15, 30, 0 } } } },
+        // ---- v1.3: artist-style + new-effect presets ----
+        { "Holdsworth-Style Legato Lead", {
+            { FxCompressor, 100, 0, { -24, 4, 20, 250, 5, 70 } },
+            { FxOverdrive, 100, 0, { 35, 45, 400, 0, 15, -10 } },
+            { FxAmp, 100, 0, { 62, 5, 7, 4.5f, 4.5f, 3 } },
+            { FxEq, 100, 0, { 80, 0, 900, 2, -3, 6500 } },
+            { FxTapEnsemble, 35, 0, { 8, 15, 5, 100, 8, 7000 } },
+            { FxDelay, 18, 0, { 420, 0, 25, 4000, 0, 10 } },
+            { FxReverb, 18, 0, { 60, 2.2f, 50, 25, 30, 0 } } } },
+
+        { "Holdsworth-Style Swell Chords", {
+            { FxSwell, 100, 0, { -50, 450, 60, 9 } },
+            { FxCompressor, 100, 0, { -30, 3, 15, 200, 6, 50 } },
+            { FxAmp, 100, 0, { 12, 5, 5, 5.5f, 5, 2 } },
+            { FxTapEnsemble, 55, 0, { 8, 15, 5, 100, 15, 9000 } },
+            { FxDelay, 22, 0, { 520, 0, 30, 4500, 0, 10 } },
+            { FxReverb, 25, 0, { 75, 3.5f, 45, 30, 40, 0 } } } },
+
+        { "SynthAxe-Style Lead", {
+            { FxCompressor, 100, 0, { -26, 4, 10, 200, 4, 50 } },
+            { FxSynth, 65, 6, { 0, 2, 2200, 40, 40, 80 } },
+            { FxTapEnsemble, 40, 0, { 8, 15, 5, 100, 12, 8000 } },
+            { FxDelay, 20, 0, { 450, 0, 30, 4000, 0, 10 } },
+            { FxReverb, 30, 0, { 70, 3, 45, 25, 40, 0 } } } },
+
+        { "Cisneros-Style Sleep Fuzz Bass", {
+            { FxCompressor, 100, 0, { -20, 3, 25, 200, 2, 60 } },
+            { FxOverdrive, 100, 0, { 55, 40, 60, 45, 25, -8 } },
+            { FxDistortion, 70, 0, { 70, 35, 1, 0, 4, -17 } },
+            { FxAmp, 100, 0, { 75, 7, 6.5f, 4, 4, 4 } },
+            { FxEq, 100, 0, { 30, 3, 700, 2, -2, 5000 } } } },
+
+        { "Cisneros-Style OM Dub Bass", {
+            { FxCompressor, 100, 0, { -22, 4, 30, 250, 4, 70 } },
+            { FxAmp, 100, 0, { 35, 7.5f, 5.5f, 4, 4, 4 } },
+            { FxEq, 100, 0, { 30, 3, 600, 1.5f, -4, 4000 } },
+            { FxDelay, 25, 0, { D, 5, 45, 2000, 2, 30 } },
+            { FxSpring, 25, 0, { 3, 3000, 70, 45, 30 } } } },
+
+        { "Sub Synth Bass", {
+            { FxCompressor, 100, 0, { -22, 4, 15, 150, 4, 40 } },
+            { FxSynth, 45, 0, { 3, 1, 800, 10, 10, 5 } },
+            { FxEq, 100, 0, { 25, 2, 800, 0, -1, 9000 } } } },
+
+        { "Endless Ascent", {
+            { FxOverdrive, 100, 0, { 20, 55, 500, 30, 20, -9 } },
+            { FxAmp, 100, 0, { 30, 5, 5.5f, 6, 5.5f, 2 } },
+            { FxBarber, 100, 0, { 2, 0.12f, 6, 55, 60 } },
+            { FxReverb, 25, 0, { 65, 2.5f, 45, 20, 35, 0 } } } },
+
+        { "Midnight Radio", {
+            { FxAmp, 100, 0, { 25, 5, 6, 5, 5, 1 } },
+            { FxRadio, 100, 0, { 0, 20, 35, 30, 30 } },
+            { FxSpring, 30, 0, { 2.5f, 3500, 60, 40, 40 } } } },
+
+        { "Orbiting Satellite", {
+            { FxOrbit, 100, 0, { 0.35f, 0, 60, 60, 90 } },
+            { FxChaos, 35, 0, { 380, 50, 0.4f, 55, 5000, 90 } },
+            { FxReverb, 30, 0, { 75, 4, 40, 30, 50, 15 } } } },
+
+        { "Melting Clock", {
+            { FxMelt, 100, 0, { 3, 2, 40, 50, 9 } },
+            { FxTape, 100, 0, { 6, 30, 20, 15, 40, 20 } },
+            { FxReverb, 30, 0, { 60, 2.5f, 55, 20, 40, 0 } } } },
+
+        { "Chaos Garden", {
+            { FxFreeze, 100, 0, { 0, 50, 300, 2, 20, 5000 } },
+            { FxChaos, 45, 0, { 450, 60, 0.6f, 65, 4500, 90 } },
+            { FxGhostVerb, 40, 0, { 80, 6, 60, 500, 40, 20 } } } },
     };
     return presets;
 }

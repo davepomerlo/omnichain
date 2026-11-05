@@ -1,6 +1,6 @@
 # OmniChain: modular multi-FX (VST3)
 
-An 8-slot effects chain where any slot can hold any of 37 built-in effects, plus a **Cab IR loader**
+An 8-slot effects chain where any slot can hold any of 44 built-in effects, plus a **Cab IR loader**
 and a **Neural Amp Modeler (NAM) loader** for free captures of real amps, pedals and cabinets. You can reorder the chain by dragging,
 and the plugin reports **0 samples of latency**. A full 8-slot chain uses about 1–2 % of one CPU core.
 
@@ -54,6 +54,26 @@ Set the audio device under *Options → Audio/MIDI settings*.
 * **Ghost Verb:** a huge reverb that ducks out of the way while you play and blooms when you stop. *Swell* slows the bloom.
 * **Amp Feedback:** hold a note and it blooms into singing octave (or fifth) feedback. Re-picking resets it, just like a real amp.
 
+## The 1.3 effects and artist-style presets
+
+* **Tap Ensemble:** up to 8 mono delay taps (15–50 ms by default), panned hard left to hard right. This is the
+  "bunch of delay lines" chorus Allan Holdsworth described, which gives width with no seasick warble.
+* **Guitar Synth:** follows the note you play and drives a synth voice (saw, square, organ or sub sine; -2 to +1 octave).
+  Play single notes. Chords confuse any pitch tracker. *Attack* gives a slow, breathy swell, and *Sub Sine* at -1 octave makes a great bass sub.
+* **Barber Pole:** a flanger or phaser that seems to rise (or fall) forever, the Shepard-tone illusion.
+* **Radio Tuner:** AM radio, telephone, walkie-talkie or gramophone. *Detune* drifts you off-station into whistles and static, and *Scan* wanders the dial.
+* **Orbit:** your sound circles your head with real Doppler pitch shift and head shadow. Best on headphones.
+* **Melt:** every new note slowly sags in pitch and darkens, like warm tape. It resets on each new pick.
+* **Chaos Echo:** four echoes whose times are steered by a Lorenz attractor. It never repeats the same way twice.
+
+**Artist-style presets** (my own approximations from published rig descriptions, not official sounds):
+* *Holdsworth-Style Legato Lead:* compression and a smooth, mid-forward Boogie-ish drive with the fizz rolled off, into an
+  8-tap ensemble, a short delay and a little reverb. *Swell Chords:* auto volume swells into a clean amp and a wide tap ensemble.
+* *SynthAxe-Style Lead:* Guitar Synth with a breathy attack, through the tap ensemble.
+* *Cisneros-Style Sleep Fuzz Bass:* overdrive with clean blend, then Muff fuzz at 70 % mix (parallel, so the low end
+  survives), into a cranked amp on the 4x10 cab with a low-mid push. *OM Dub Bass:* warm, compressed bass with tape echo and spring.
+  On bass, adjust the Input knob so your bass hits the chain about as hard as a guitar would.
+
 ### Using an expression pedal with the Wah in FL Studio
 Wiggle the Wah's **Pedal** knob, then choose **Tools → Last tweaked → Link to controller…** in FL Studio and move your MIDI
 expression pedal. Any other knob can be linked the same way, for example Freeze Pad's *Mode* on a footswitch.
@@ -84,6 +104,7 @@ expression pedal. Any other knob can be linked the same way, for example Freeze 
 | Creative | Bitcrusher, **Glitch Grid** (tempo-locked stutter / reverse / tape-stop), **Granular Cloud** |
 | Utility | Stereo Imager (width, mono-bass, Haas, pan) |
 | New in 1.2 | **Wah Pedal** (Cry Baby, Vox, Wide, Bass; pedal, auto, LFO or tempo sweep), **Freeze Pad**, **Step Filter**, **Harmonic Arp**, **Sympathetic Strings**, **Spiral Delay**, **Ghost Verb**, **Amp Feedback** |
+| New in 1.3 | **Tap Ensemble** (8-tap Holdsworth-style chorus), **Guitar Synth** (pitch-tracking synth), **Barber Pole**, **Radio Tuner**, **Orbit**, **Melt**, **Chaos Echo** |
 | Loaders | **NAM Capture** (Neural Amp Modeler `.nam`), **Cab IR Loader** (`.wav/.aif/.flac`, zero-latency partitioned convolution) |
 
 ### About "zero latency"

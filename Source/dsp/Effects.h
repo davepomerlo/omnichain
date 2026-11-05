@@ -54,6 +54,8 @@ enum EffectType
     FxCabIR, FxNam,
     // Added in 1.2
     FxWah, FxFreeze, FxStepFilter, FxArp, FxStrings, FxSpiral, FxGhostVerb, FxFeedback,
+    // Added in 1.3
+    FxTapEnsemble, FxSynth, FxBarber, FxRadio, FxOrbit, FxMelt, FxChaos,
     NumEffectTypes
 };
 

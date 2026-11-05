@@ -175,14 +175,15 @@ int main (int argc, char** argv)
 
     // 7. showcase: all v1.2 effects in one chain
     {
-        const int showcase[8] = { oc::FxWah, oc::FxFeedback, oc::FxFreeze, oc::FxStepFilter, oc::FxArp, oc::FxStrings, oc::FxSpiral, oc::FxGhostVerb };
+        const int showcase[8] = { oc::FxSynth, oc::FxMelt, oc::FxTapEnsemble, oc::FxBarber, oc::FxRadio, oc::FxOrbit, oc::FxChaos, oc::FxGhostVerb };
         for (int s = 0; s < 8; ++s) p.setSlotType (s, showcase[s], true);
-        p.currentPresetName = "v1.2 showcase";
+        p.currentPresetName = "v1.3 showcase";
         p.engine.service(); bool fin = true; runAudio (p, 8, bs, 2, sr, fin); p.engine.service();
         const float pk = runAudio (p, 200, bs, 2, sr, fin);
         std::printf ("showcase chain peak %.2f\n", pk);
         CHECK (fin && pk < 4.0f, "showcase chain");
-        snapshot (p, outDir + "/omnichain_v12.png");
+        snapshot (p, outDir + "/omnichain_v13.png");
+        for (int i = 0; i < p.getNumPrograms(); ++i) if (p.getProgramName (i).startsWith ("Holdsworth-Style Legato")) { p.setCurrentProgram (i); p.engine.service(); snapshot (p, outDir + "/omnichain_holdsworth.png"); }
     }
 
     std::printf ("\n%s (%d failures)\n", failures ? "FAILED" : "ALL HOST TESTS OK", failures);
