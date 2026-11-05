@@ -8,12 +8,18 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: "Publish a release with this version tag (e.g. v1.1). Leave empty for a plain build."
+        description: "Publish a release with this version tag (e.g. v1.5). Leave empty for a plain build."
         required: false
         default: ""
 
 permissions:
-  contents: write   # needed to publish a Release when a v* tag is pushed
+  contents: write   # needed to publish a Release
+
+env:
+  JUCE_TAG: "7.0.12"
+  NAM_TAG: "v0.6.0"
+  EIGEN_TAG: "3.4.1"
+  CLAP_JUCE_COMMIT: "7adee3a1bd4684d4caa5601100e364abccff4b4d"
 
 jobs:
   dsp-tests:
@@ -22,60 +28,145 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Get NAM core + Eigen
-        shell: bash
         run: |
-          git clone --depth 1 --branch v0.6.0 https://github.com/sdatkinson/NeuralAmpModelerCore.git ThirdParty/NeuralAmpModelerCore
-          git clone --depth 1 --branch 3.4.1 https://gitlab.com/libeigen/eigen.git ThirdParty/eigen
-      - name: Build and run engine test (incl. convolver + NAM)
+          git clone --depth 1 --branch $NAM_TAG https://github.com/sdatkinson/NeuralAmpModelerCore.git ThirdParty/NeuralAmpModelerCore
+          git clone --depth 1 --branch $EIGEN_TAG https://gitlab.com/libeigen/eigen.git ThirdParty/eigen
+      - name: Build and run engine test (all effects, convolver, NAM)
         run: |
           N=ThirdParty/NeuralAmpModelerCore
           g++ -std=c++20 -O2 -DNAM_SAMPLE_FLOAT -I$N -IThirdParty/eigen -I$N/Dependencies/nlohmann \
               tests/EngineTest.cpp Source/dsp/*.cpp $(find $N/NAM -name '*.cpp') -o enginetest
           ./enginetest $N/example_models/wavenet.nam $N/example_models/lstm.nam
 
-  windows:
-    name: Windows VST3 + Standalone (MSVC)
-    runs-on: windows-latest
+  build:
+    name: ${{ matrix.name }}
     needs: dsp-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows (VST3, CLAP, Standalone)
+            os: windows-latest
+            platform: Windows
+            targets: OmniChain_VST3 OmniChain_CLAP OmniChain_Standalone
+          - name: macOS universal (AU, VST3, CLAP, Standalone)
+            os: macos-latest
+            platform: macOS
+            targets: OmniChain_VST3 OmniChain_AU OmniChain_CLAP OmniChain_Standalone
+          - name: Linux (VST3, LV2, CLAP, Standalone)
+            os: ubuntu-22.04
+            platform: Linux
+            targets: OmniChain_VST3 OmniChain_LV2 OmniChain_CLAP OmniChain_Standalone
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
 
-      - name: Get JUCE 7.0.12
-        run: git clone --depth 1 --branch 7.0.12 https://github.com/juce-framework/JUCE.git JUCE
-      - name: Get NAM core + Eigen
+      - name: Get dependencies (JUCE, NAM core, Eigen, CLAP extensions)
         shell: bash
         run: |
-          git clone --depth 1 --branch v0.6.0 https://github.com/sdatkinson/NeuralAmpModelerCore.git ThirdParty/NeuralAmpModelerCore
-          git clone --depth 1 --branch 3.4.1 https://gitlab.com/libeigen/eigen.git ThirdParty/eigen
+          git clone --depth 1 --branch $JUCE_TAG https://github.com/juce-framework/JUCE.git JUCE
+          git clone --depth 1 --branch $NAM_TAG https://github.com/sdatkinson/NeuralAmpModelerCore.git ThirdParty/NeuralAmpModelerCore
+          git clone --depth 1 --branch $EIGEN_TAG https://gitlab.com/libeigen/eigen.git ThirdParty/eigen
+          git clone https://github.com/free-audio/clap-juce-extensions.git ThirdParty/clap-juce-extensions
+          git -C ThirdParty/clap-juce-extensions checkout $CLAP_JUCE_COMMIT
+          git -C ThirdParty/clap-juce-extensions submodule update --init --recursive
+
+      - name: Linux system packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libasound2-dev libjack-jackd2-dev libfreetype6-dev libfontconfig1-dev \
+            libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev libxrandr-dev libxrender-dev \
+            libglu1-mesa-dev mesa-common-dev
 
       - name: Configure
-        run: cmake -S . -B build -A x64
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            cmake -S . -B build -A x64
+          elif [ "$RUNNER_OS" == "Linux" ]; then
+            cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          else
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          fi
 
       - name: Build
-        run: cmake --build build --config Release --target OmniChain_VST3 OmniChain_Standalone --parallel
+        shell: bash
+        run: cmake --build build --config Release --parallel 4 --target ${{ matrix.targets }}
 
-      - name: Package
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $a = "build/OmniChain_artefacts/Release"
           $out = "OmniChain-Windows"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
-          Copy-Item -Recurse "build/OmniChain_artefacts/Release/VST3/OmniChain.vst3" "$out/"
-          Copy-Item "build/OmniChain_artefacts/Release/Standalone/OmniChain.exe" "$out/"
+          Copy-Item -Recurse "$a/VST3/OmniChain.vst3" "$out/"
+          Copy-Item "$a/CLAP/OmniChain.clap" "$out/"
+          Copy-Item "$a/Standalone/OmniChain.exe" "$out/"
           Copy-Item "README.md" "$out/"
           Compress-Archive -Path $out -DestinationPath "OmniChain-Windows.zip" -Force
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: OmniChain-Windows
-          path: OmniChain-Windows
+      - name: Sign, validate and package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          A=build/OmniChain_artefacts/Release
+          OUT=OmniChain-macOS
+          mkdir -p $OUT
+          cp -R "$A/VST3/OmniChain.vst3" "$A/AU/OmniChain.component" "$A/CLAP/OmniChain.clap" "$A/Standalone/OmniChain.app" README.md $OUT/
+          for b in $OUT/OmniChain.vst3 $OUT/OmniChain.component $OUT/OmniChain.clap $OUT/OmniChain.app; do
+            codesign --force --deep --sign - "$b"
+          done
+          lipo -info $OUT/OmniChain.component/Contents/MacOS/OmniChain
+          # Apple's Audio Unit validator
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R $OUT/OmniChain.component ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          sleep 3
+          auval -a | grep -i omni || true
+          auval -strict -v aufx Omc1 Omch
+          ditto -c -k --sequesterRsrc --keepParent $OUT OmniChain-macOS.zip
 
-      - name: Publish release (v* tag push, or manual run with a version)
-        if: startsWith(github.ref, 'refs/tags/v') || inputs.release != ''
-        uses: softprops/action-gh-release@v2
+      - name: Validate and package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          A=build/OmniChain_artefacts/Release
+          # Steinberg's official VST3 validator
+          git clone --depth 1 https://github.com/steinbergmedia/vst3sdk.git /tmp/vst3sdk
+          (cd /tmp/vst3sdk && git submodule update --init --depth 1 base pluginterfaces public.sdk cmake)
+          cmake -S /tmp/vst3sdk -B /tmp/vst3sdk/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF -DSMTG_RUN_VST_VALIDATOR=OFF
+          ninja -C /tmp/vst3sdk/build validator
+          /tmp/vst3sdk/build/bin/Release/validator "$A/VST3/OmniChain.vst3"
+          OUT=OmniChain-Linux
+          mkdir -p $OUT
+          cp -R "$A/VST3/OmniChain.vst3" "$A/LV2/OmniChain.lv2" "$A/CLAP/OmniChain.clap" "$A/Standalone/OmniChain" README.md $OUT/
+          tar -czf OmniChain-Linux.tar.gz $OUT
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OmniChain-${{ matrix.platform }}
+          path: |
+            OmniChain-Windows.zip
+            OmniChain-macOS.zip
+            OmniChain-Linux.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: ls -la dist
+      - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release || github.ref_name }}
           name: OmniChain ${{ inputs.release || github.ref_name }}
           target_commitish: ${{ github.sha }}
-          files: OmniChain-Windows.zip
+          files: dist/*
           generate_release_notes: true

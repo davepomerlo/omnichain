@@ -4,15 +4,53 @@ An 8-slot effects chain where any slot can hold any of 44 built-in effects, plus
 and a **Neural Amp Modeler (NAM) loader** for free captures of real amps, pedals and cabinets. You can reorder the chain by dragging,
 and the plugin reports **0 samples of latency**. A full 8-slot chain uses about 1–2 % of one CPU core.
 
-## Install in FL Studio (Windows 10/11, 64-bit)
+## Downloads: pick your system
 
-1. If Windows marks the zip as downloaded from the internet, right-click it → **Properties** → tick **Unblock** → OK, then extract it.
-2. Copy the whole **`OmniChain.vst3`** folder to `C:\Program Files\Common Files\VST3\`.
-3. In FL Studio: **Options → Manage plugins → Find installed plugins** (or *Start scan*).
-   OmniChain appears under *Effects*. Tick the star to add it to favourites.
-4. In the Mixer, click an insert slot ▸ choose **OmniChain**.
+Get the latest version from the **Releases** page (right-hand side of the repo page):
 
-`OmniChain.exe` is the same thing as a standalone app (plug your guitar interface in and play, no DAW needed).
+| Download | Contains | Use it in |
+|---|---|---|
+| **OmniChain-Windows.zip** | `OmniChain.vst3`, `OmniChain.clap`, `OmniChain.exe` | FL Studio, Ableton Live, Cubase, Reaper, Studio One, Bitwig, Cakewalk, Reason, … |
+| **OmniChain-macOS.zip** (Apple Silicon + Intel, macOS 11+) | `OmniChain.component` (AU), `OmniChain.vst3`, `OmniChain.clap`, `OmniChain.app` | Logic Pro, GarageBand, MainStage (AU); Ableton, Cubase, Reaper, Studio One, Bitwig, FL Studio Mac (VST3) |
+| **OmniChain-Linux.tar.gz** (x86-64) | `OmniChain.vst3`, `OmniChain.lv2`, `OmniChain.clap`, standalone `OmniChain` | Reaper, Bitwig, Ardour, Carla, Qtractor, … |
+
+**Which format?** **VST3** works almost everywhere. **AU** is for Logic and GarageBand. **CLAP** is a newer open format
+for hosts that support it (Bitwig, Reaper, Studio One 7). **LV2** is for Linux hosts like Ardour.
+Install whichever your DAW uses. Installing several does no harm.
+
+**Pro Tools:** Pro Tools only loads Avid's AAX format, which needs a paid Avid developer agreement and code-signing,
+so it isn't included. To use OmniChain there, run it inside a free plugin "wrapper" that Pro Tools can load,
+or as the standalone app routed into Pro Tools.
+
+### Windows
+1. Right-click the zip → **Properties** → tick **Unblock** → OK, then extract it.
+2. Copy `OmniChain.vst3` (the whole folder) to `C:\Program Files\Common Files\VST3\`
+   and `OmniChain.clap` to `C:\Program Files\Common Files\CLAP\` (create the folder if needed).
+3. Rescan plugins in your DAW. In FL Studio: **Options → Manage plugins → Find installed plugins**.
+
+### macOS
+1. Double-click the zip to extract it.
+2. Copy the files to these folders (in Finder use **Go → Go to Folder…**):
+   * `OmniChain.component` → `~/Library/Audio/Plug-Ins/Components/`
+   * `OmniChain.vst3` → `~/Library/Audio/Plug-Ins/VST3/`
+   * `OmniChain.clap` → `~/Library/Audio/Plug-Ins/CLAP/`
+3. The plugin isn't notarised by Apple (that needs a paid developer account), so macOS will quarantine it.
+   Open **Terminal** and run this once:
+   ```
+   xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/OmniChain.component ~/Library/Audio/Plug-Ins/VST3/OmniChain.vst3 ~/Library/Audio/Plug-Ins/CLAP/OmniChain.clap
+   ```
+   For the app: right-click `OmniChain.app` → **Open** → **Open**.
+4. Logic Pro: **Logic Pro → Settings → Plug-in Manager → Reset & Rescan Selection** if it doesn't appear.
+   OmniChain is under **Audio FX → OmniChain**.
+
+### Linux
+```
+tar xzf OmniChain-Linux.tar.gz && cd OmniChain-Linux
+mkdir -p ~/.vst3 ~/.lv2 ~/.clap
+cp -r OmniChain.vst3 ~/.vst3/ && cp -r OmniChain.lv2 ~/.lv2/ && cp OmniChain.clap ~/.clap/
+```
+
+The standalone app (`OmniChain.exe` / `OmniChain.app` / `OmniChain`) lets you plug your guitar interface in and play with no DAW needed.
 Set the audio device under *Options → Audio/MIDI settings*.
 
 ## Real amps and cabinets for free: NAM captures + cab IRs
@@ -121,14 +159,16 @@ To build it yourself with Visual Studio (2022 or newer, with the "Desktop develo
 git clone --depth 1 --branch 7.0.12 https://github.com/juce-framework/JUCE.git JUCE
 git clone --depth 1 --branch v0.6.0 https://github.com/sdatkinson/NeuralAmpModelerCore.git ThirdParty/NeuralAmpModelerCore
 git clone --depth 1 --branch 3.4.1 https://gitlab.com/libeigen/eigen.git ThirdParty/eigen
+git clone --recursive https://github.com/free-audio/clap-juce-extensions.git ThirdParty/clap-juce-extensions   # optional: CLAP
 cmake -S . -B build -A x64
-cmake --build build --config Release --target OmniChain_VST3 OmniChain_Standalone
+cmake --build build --config Release --target OmniChain_VST3 OmniChain_CLAP OmniChain_Standalone
+# macOS adds OmniChain_AU, Linux adds OmniChain_LV2
 ```
 
 ### Automatic builds (GitHub Actions)
 
-Every push to `main` runs the DSP stress test, builds the plugin with Visual Studio on GitHub's Windows machines,
-and attaches **OmniChain-Windows** (VST3 + standalone + this README) to the run.
+Every push to `main` runs the DSP stress test, then builds Windows (Visual Studio), macOS (universal, ad-hoc signed,
+checked with Apple's `auval`) and Linux (checked with Steinberg's VST3 validator) in parallel, and attaches the three packages to the run.
 Download it from the **Actions** tab → latest run → *Artifacts* (you need to be signed in).
 
 To publish a version anyone can download: **Actions** tab → *Build OmniChain* → **Run workflow**, type a version such as `v1.1`, and press Run.
@@ -141,5 +181,5 @@ Adding an effect: add an entry to the `EffectType` enum and the `kInfos` table (
 write a class in `Effects.cpp`, and add it to `createEffect()`. The GUI and automation pick it up automatically.
 
 Licence note: built on JUCE 7 under its GPLv3 option, which is fine for personal use and for sharing the source under GPLv3.
-NAM support uses NeuralAmpModelerCore (MIT, Steven Atkinson) and Eigen (MPL2). NAM captures and IRs belong to their creators.
+NAM support uses NeuralAmpModelerCore (MIT, Steven Atkinson) and Eigen (MPL2). CLAP support uses clap-juce-extensions (MIT). NAM captures and IRs belong to their creators.
 Check each pack's terms before redistributing it.

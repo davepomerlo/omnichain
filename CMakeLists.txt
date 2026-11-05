@@ -1,5 +1,12 @@
 cmake_minimum_required(VERSION 3.22)
-project(OmniChain VERSION 1.0.0 LANGUAGES C CXX)
+
+# macOS: one universal binary for Apple Silicon + Intel, runs on macOS 11+
+set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
+if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES)
+    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "" FORCE)
+endif()
+
+project(OmniChain VERSION 1.4.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -25,12 +32,20 @@ else()
     target_compile_options(nam_core PRIVATE -O3)
 endif()
 
+# Formats per platform: VST3 + Standalone everywhere, AU on macOS, LV2 on Linux; CLAP added below
+set(OMNICHAIN_FORMATS VST3 Standalone)
+if(APPLE)
+    list(APPEND OMNICHAIN_FORMATS AU)
+elseif(UNIX)
+    list(APPEND OMNICHAIN_FORMATS LV2)
+endif()
+
 juce_add_plugin(OmniChain
     COMPANY_NAME "OmniChain"
     BUNDLE_ID "com.omnichain.multifx"
     PLUGIN_MANUFACTURER_CODE Omch
     PLUGIN_CODE Omc1
-    FORMATS VST3 Standalone
+    FORMATS ${OMNICHAIN_FORMATS}
     PRODUCT_NAME "OmniChain"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
@@ -38,6 +53,11 @@ juce_add_plugin(OmniChain
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
     VST3_CATEGORIES Fx
+    AU_MAIN_TYPE kAudioUnitType_Effect
+    AU_SANDBOX_SAFE TRUE
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "OmniChain needs audio input to process your guitar or bass."
+    LV2URI "https://github.com/davepomerlo/omnichain"
     VST3_AUTO_MANIFEST FALSE
     COPY_PLUGIN_AFTER_BUILD FALSE)
 
@@ -63,10 +83,26 @@ target_link_libraries(OmniChain
     PRIVATE juce::juce_audio_utils nam_core
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags juce::juce_recommended_warning_flags)
 
+# CLAP (Bitwig, Reaper, FL Studio, Studio One, ...) via clap-juce-extensions (MIT)
+#   git clone --recursive https://github.com/free-audio/clap-juce-extensions.git ThirdParty/clap-juce-extensions
+#   (pinned in CI to commit 7adee3a, which supports JUCE 7.0.12)
+set(CLAP_JUCE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/clap-juce-extensions" CACHE PATH "Path to clap-juce-extensions")
+if(EXISTS "${CLAP_JUCE_PATH}/CMakeLists.txt")
+    add_subdirectory(${CLAP_JUCE_PATH} clap-juce-extensions EXCLUDE_FROM_ALL)
+    clap_juce_extensions_plugin(TARGET OmniChain
+        CLAP_ID "com.omnichain.multifx"
+        CLAP_FEATURES audio-effect multi-effects distortion delay reverb stereo)
+else()
+    message(STATUS "clap-juce-extensions not found - skipping the CLAP format")
+endif()
+
 if(MINGW)
     # Self-contained binaries: no libc++ / pthread DLLs needed on the target machine
     target_link_options(OmniChain_VST3 PRIVATE -static)
     target_link_options(OmniChain_Standalone PRIVATE -static)
+    if(TARGET OmniChain_CLAP)
+        target_link_options(OmniChain_CLAP PRIVATE -static)
+    endif()
 endif()
 
 # ---------------------------------------------------------------- optional headless test host
