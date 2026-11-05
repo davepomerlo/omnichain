@@ -58,6 +58,9 @@ jobs:
             platform: Linux
             targets: OmniChain_VST3 OmniChain_LV2 OmniChain_CLAP OmniChain_Standalone
     runs-on: ${{ matrix.os }}
+    env:
+      # JUCE 7 uses APIs Apple removed for macOS 15+ targets; target macOS 11 everywhere (incl. JUCE's helper tool)
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - uses: actions/checkout@v5
 
