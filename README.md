@@ -4,6 +4,8 @@ An 8-slot effects chain where any slot can hold any of 44 built-in effects, plus
 and a **Neural Amp Modeler (NAM) loader** for free captures of real amps, pedals and cabinets. You can reorder the chain by dragging,
 and the plugin reports **0 samples of latency**. A full 8-slot chain uses about 1–2 % of one CPU core.
 
+**Download page: https://davepomerlo.github.io/omnichain/**
+
 ## Downloads: pick your system
 
 Get the latest version from the **Releases** page (right-hand side of the repo page):

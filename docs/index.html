@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OmniChain - free multi-effects plugin (VST3, AU, CLAP, LV2)</title>
+<meta name="description" content="OmniChain is a free, open-source multi-effects plugin: 46 effects in an 8-slot chain you can reorder, NAM and cab IR loading, zero latency. Windows, macOS and Linux.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800;900&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --alu: #E4E7EA;
+    --panel: #F4F5F6;
+    --ink: #1B2430;
+    --muted: #556070;
+    --rule: #C3C9D0;
+    --c-dyn: #4FC3F7; --c-drive: #FF7043; --c-filter: #FFCA28; --c-mod: #AB47BC;
+    --c-pitch: #66BB6A; --c-time: #26C6DA; --c-creative: #EC407A; --c-util: #90A4AE;
+    --display: "Big Shoulders Display", "Arial Narrow", sans-serif;
+    --body: "Instrument Sans", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; color: var(--ink); font: 400 1.0625rem/1.6 var(--body);
+    background: var(--alu) repeating-linear-gradient(90deg, rgba(255,255,255,.18) 0 1px, transparent 1px 3px);
+  }
+  a { color: inherit; }
+  a:focus-visible, button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; border-radius: 4px; }
+  .wrap { width: min(1160px, 100% - 2.5rem); margin-inline: auto; }
+
+  /* ---------- hero ---------- */
+  header { padding: 3.5rem 0 0; }
+  .wordmark {
+    font: 900 clamp(3rem, 13vw, 10.5rem)/.82 var(--display);
+    letter-spacing: -.01em; margin: 0; text-transform: uppercase;
+  }
+  .ribbon { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; margin: 1.6rem 0 2.2rem; max-width: 46rem; }
+  .ribbon a {
+    display: block; height: 14px; border-radius: 7px; background: var(--c);
+    transform-origin: left center; animation: plug .5s cubic-bezier(.2,.8,.2,1) both;
+    animation-delay: calc(var(--i) * 70ms);
+  }
+  .ribbon a:hover { filter: brightness(1.08); }
+  @keyframes plug { from { transform: scaleX(0); opacity: .2; } to { transform: scaleX(1); opacity: 1; } }
+  .lede { font-size: clamp(1.25rem, 2.2vw, 1.55rem); line-height: 1.4; max-width: 34ch; margin: 0 0 2rem; font-weight: 500; }
+  .get { display: flex; flex-wrap: wrap; align-items: center; gap: .8rem 1.4rem; }
+  .btn {
+    display: inline-flex; align-items: center; gap: .7rem; text-decoration: none;
+    background: var(--ink); color: #fff; font: 600 1.1rem/1 var(--body);
+    padding: 1.05rem 1.5rem; border-radius: 10px; border: 0; cursor: pointer;
+  }
+  .btn:hover { background: #2A3646; }
+  .btn svg { width: 20px; height: 20px; }
+  .others { color: var(--muted); font-size: .98rem; }
+  .others a { color: var(--ink); font-weight: 600; text-underline-offset: 3px; }
+  .fine { color: var(--muted); font-size: .9rem; margin-top: .9rem; }
+
+  .shot { margin: 3rem 0 0; }
+  .shot img { display: block; width: 100%; height: auto; border-radius: 14px; box-shadow: 0 30px 60px -30px rgba(27,36,48,.55), 0 0 0 1px rgba(27,36,48,.18); }
+  .shot figcaption { color: var(--muted); font-size: .92rem; margin-top: .8rem; }
+
+  /* ---------- sections ---------- */
+  section { padding: 5rem 0 0; }
+  h2 { font: 800 clamp(2.4rem, 5vw, 3.6rem)/.95 var(--display); margin: 0 0 1rem; text-transform: uppercase; }
+  .intro { max-width: 60ch; color: var(--muted); margin: 0 0 2.2rem; }
+
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 2rem 2.5rem; padding: 4.5rem 0 0; }
+  .facts p { margin: .3rem 0 0; color: var(--muted); }
+  .facts h3 { margin: 0; font: 800 1.9rem/1 var(--display); text-transform: uppercase; }
+
+  /* platforms */
+  .platforms { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); border-top: 2px solid var(--ink); }
+  .platform { padding: 1.6rem 1.6rem 1.8rem 0; border-bottom: 1px solid var(--rule); }
+  .platform + .platform { padding-left: 1.6rem; border-left: 1px solid var(--rule); }
+  .platform h3 { font: 800 2.2rem/1 var(--display); margin: 0 0 .9rem; }
+  .platform dl { margin: 0 0 1.4rem; display: grid; grid-template-columns: 5.5rem 1fr; gap: .35rem .8rem; font-size: .97rem; }
+  .platform dt { color: var(--muted); }
+  .platform dd { margin: 0; }
+  .platform .btn { font-size: 1rem; padding: .85rem 1.2rem; }
+  .note { color: var(--muted); font-size: .95rem; max-width: 70ch; margin-top: 1.4rem; }
+
+  /* effects */
+  .cats { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 2.2rem 2.5rem; }
+  .cat { border-top: 6px solid var(--c); padding-top: .9rem; scroll-margin-top: 1.5rem; }
+  .cat h3 { margin: 0 0 .6rem; font: 800 1.45rem/1.05 var(--display); text-transform: uppercase; }
+  .cat ul { list-style: none; margin: 0; padding: 0; }
+  .cat li { padding: .22rem 0; }
+  .cat li span { color: var(--muted); font-size: .92rem; }
+
+  .pair { display: grid; grid-template-columns: 1fr 1.25fr; gap: 3rem; align-items: center; }
+  .pair img { width: 100%; height: auto; border-radius: 12px; box-shadow: 0 0 0 1px rgba(27,36,48,.18); display: block; }
+  .pair p { max-width: 52ch; }
+
+  /* install */
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2.5rem; }
+  .steps h3 { font: 800 1.8rem/1 var(--display); margin: 0 0 .8rem; }
+  .steps ol { margin: 0; padding-left: 1.2rem; }
+  .steps li { margin-bottom: .55rem; }
+  code { font-size: .88em; background: var(--panel); border: 1px solid var(--rule); border-radius: 5px; padding: .08em .35em; word-break: break-all; }
+  pre { background: var(--ink); color: #E8EDF3; border-radius: 10px; padding: 1rem 1.1rem; overflow-x: auto; font-size: .82rem; line-height: 1.5; }
+  pre code { background: none; border: 0; padding: 0; color: inherit; word-break: normal; }
+
+  footer { margin-top: 6rem; padding: 2rem 0 3rem; border-top: 2px solid var(--ink); color: var(--muted); font-size: .95rem; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: .6rem 2rem; justify-content: space-between; }
+
+  @media (max-width: 760px) {
+    .pair { grid-template-columns: 1fr; }
+    .platform, .platform + .platform { padding: 1.4rem 0; border-left: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .ribbon a { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<header class="wrap">
+  <h1 class="wordmark">OmniChain</h1>
+  <nav class="ribbon" aria-label="Effect categories">
+    <a href="#dynamics" style="--c:var(--c-dyn);--i:0" title="Dynamics" aria-label="Dynamics"></a>
+    <a href="#drive" style="--c:var(--c-drive);--i:1" title="Drive &amp; amp" aria-label="Drive and amp"></a>
+    <a href="#filter" style="--c:var(--c-filter);--i:2" title="Filter &amp; EQ" aria-label="Filter and EQ"></a>
+    <a href="#modulation" style="--c:var(--c-mod);--i:3" title="Modulation" aria-label="Modulation"></a>
+    <a href="#pitch" style="--c:var(--c-pitch);--i:4" title="Pitch" aria-label="Pitch"></a>
+    <a href="#time" style="--c:var(--c-time);--i:5" title="Time &amp; space" aria-label="Time and space"></a>
+    <a href="#creative" style="--c:var(--c-creative);--i:6" title="Creative &amp; lo-fi" aria-label="Creative and lo-fi"></a>
+    <a href="#utility" style="--c:var(--c-util);--i:7" title="Utility" aria-label="Utility"></a>
+  </nav>
+  <p class="lede">A free pedalboard for your DAW. Load any of 46 effects into eight slots, drag them into any order, and play with zero added latency.</p>
+
+  <div class="get">
+    <a class="btn" id="main-download" href="#download">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 20h16"/></svg>
+      <span id="main-label">Download OmniChain</span>
+    </a>
+    <span class="others" id="others">Windows, macOS and Linux: <a href="#download">choose your system</a></span>
+  </div>
+  <p class="fine" id="fine">Free and open source. No account, no installer, no tracking.</p>
+
+  <figure class="shot">
+    <img src="img/chain.jpg" width="1220" height="790" alt="The OmniChain window: eight slots in two rows, holding a compressor, overdrive, amp, EQ, tap ensemble, delay and reverb, each with its own knobs.">
+    <figcaption>The "Holdsworth-Style Legato Lead" preset: seven effects, each slot with its own mix, level and bypass.</figcaption>
+  </figure>
+</header>
+
+<main>
+  <div class="wrap facts">
+    <div><h3>46 effects</h3><p>From noise gate to granular clouds. Any effect can go in any slot.</p></div>
+    <div><h3>Real gear, free</h3><p>Load Neural Amp Modeler captures and speaker-cabinet IRs, or drop them straight on a slot.</p></div>
+    <div><h3>0 samples latency</h3><p>No lookahead anywhere, so playing live through it feels like a pedal. A full chain uses 1–2 % of one CPU core.</p></div>
+    <div><h3>39 presets</h3><p>Clean, crunch, metal, ambient, glitch, plus Holdsworth- and Cisneros-style tones.</p></div>
+  </div>
+
+  <section id="download" class="wrap">
+    <h2>Download</h2>
+    <p class="intro">Each download has every format for that system. Install the one your DAW uses, or several. They don't conflict.</p>
+    <div class="platforms">
+      <div class="platform" id="p-win">
+        <h3>Windows</h3>
+        <dl>
+          <dt>Formats</dt><dd>VST3, CLAP, standalone app</dd>
+          <dt>Works in</dt><dd>FL Studio, Ableton Live, Cubase, Reaper, Studio One, Bitwig, Cakewalk, Reason</dd>
+          <dt>Needs</dt><dd>Windows 10 or 11, 64-bit</dd>
+        </dl>
+        <a class="btn" href="https://github.com/davepomerlo/omnichain/releases/latest/download/OmniChain-Windows.zip">Download for Windows</a>
+      </div>
+      <div class="platform" id="p-mac">
+        <h3>macOS</h3>
+        <dl>
+          <dt>Formats</dt><dd>AU, VST3, CLAP, standalone app</dd>
+          <dt>Works in</dt><dd>Logic Pro, GarageBand, MainStage, Ableton Live, Reaper, Studio One, Bitwig</dd>
+          <dt>Needs</dt><dd>macOS 11 or later, Apple Silicon or Intel</dd>
+        </dl>
+        <a class="btn" href="https://github.com/davepomerlo/omnichain/releases/latest/download/OmniChain-macOS.zip">Download for macOS</a>
+      </div>
+      <div class="platform" id="p-linux">
+        <h3>Linux</h3>
+        <dl>
+          <dt>Formats</dt><dd>VST3, LV2, CLAP, standalone</dd>
+          <dt>Works in</dt><dd>Reaper, Bitwig, Ardour, Carla, Qtractor</dd>
+          <dt>Needs</dt><dd>64-bit x86, glibc 2.35 or later</dd>
+        </dl>
+        <a class="btn" href="https://github.com/davepomerlo/omnichain/releases/latest/download/OmniChain-Linux.tar.gz">Download for Linux</a>
+      </div>
+    </div>
+    <p class="note">Pro Tools only loads Avid's AAX format, which isn't available to free projects. Use the standalone app, or host OmniChain inside a plugin wrapper that Pro Tools can load.
+      Older versions and release notes are on <a href="https://github.com/davepomerlo/omnichain/releases">GitHub Releases</a>.</p>
+  </section>
+
+  <section id="effects" class="wrap">
+    <h2>The effects</h2>
+    <p class="intro">The colours match the slot colours inside the plugin. Every effect is free to use, automate and save in presets.</p>
+    <div class="cats">
+      <div class="cat" id="dynamics" style="--c:var(--c-dyn)"><h3>Dynamics</h3><ul>
+        <li>Noise Gate</li><li>Compressor <span>VCA to opto</span></li><li>Transient Shaper</li><li>Limiter / Clipper</li><li>Slow Swell <span>auto volume swells</span></li></ul></div>
+      <div class="cat" id="drive" style="--c:var(--c-drive)"><h3>Drive &amp; amp</h3><ul>
+        <li>Overdrive <span>with clean blend</span></li><li>Distortion / Fuzz <span>Rat, Muff, Fuzz Face, octave fuzz</span></li><li>Amp + Cab</li><li>Tape Machine</li><li>NAM Capture <span>loads .nam files</span></li><li>Cab IR Loader <span>loads .wav IRs</span></li></ul></div>
+      <div class="cat" id="filter" style="--c:var(--c-filter)"><h3>Filter &amp; EQ</h3><ul>
+        <li>EQ</li><li>Wah Pedal <span>Cry Baby, Vox, wide, bass</span></li><li>Envelope Filter</li><li>Ladder Filter</li><li>Talk Box</li><li>Step Filter <span>tempo-synced patterns</span></li></ul></div>
+      <div class="cat" id="modulation" style="--c:var(--c-mod)"><h3>Modulation</h3><ul>
+        <li>Chorus</li><li>Tap Ensemble <span>8-tap Holdsworth-style chorus</span></li><li>Flanger</li><li>Phaser</li><li>Barber Pole <span>endlessly rising</span></li><li>Tremolo / Pan</li><li>Uni-Vibe</li><li>Rotary Speaker</li><li>Ring Modulator</li><li>Orbit <span>circles your head</span></li></ul></div>
+      <div class="cat" id="pitch" style="--c:var(--c-pitch)"><h3>Pitch</h3><ul>
+        <li>Octaver</li><li>Pitch Shifter</li><li>Harmonic Arp</li><li>Guitar Synth <span>follows your notes</span></li><li>Melt <span>notes sag like warm tape</span></li></ul></div>
+      <div class="cat" id="time" style="--c:var(--c-time)"><h3>Time &amp; space</h3><ul>
+        <li>Delay <span>digital, analog, tape, ping-pong, reverse</span></li><li>Reverb <span>with shimmer</span></li><li>Spring Reverb</li><li>Spiral Delay</li><li>Ghost Verb <span>blooms when you stop</span></li><li>Chaos Echo</li></ul></div>
+      <div class="cat" id="creative" style="--c:var(--c-creative)"><h3>Creative &amp; lo-fi</h3><ul>
+        <li>Freeze Pad</li><li>Amp Feedback</li><li>Sympathetic Strings</li><li>Granular Cloud</li><li>Glitch Grid</li><li>Bitcrusher</li><li>Radio Tuner</li></ul></div>
+      <div class="cat" id="utility" style="--c:var(--c-util)"><h3>Utility</h3><ul>
+        <li>Stereo Imager <span>width, mono bass, Haas, pan</span></li></ul></div>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <div class="pair">
+      <div>
+        <h2>Real amps, free</h2>
+        <p>Drag a Neural Amp Modeler capture (<code>.nam</code>) or a cabinet impulse response (<code>.wav</code>) from your file manager onto any slot. Thousands of free captures of real amps, pedals and cabinets are on TONE3000.</p>
+        <p>Use the arrows next to Load to step through a whole folder of captures while you play.</p>
+      </div>
+      <img src="img/nam-ir.jpg" width="1220" height="790" loading="lazy" alt="A NAM Capture slot followed by a Cab IR Loader slot, each showing the loaded file name with Load and next/previous buttons.">
+    </div>
+  </section>
+
+  <section id="install" class="wrap">
+    <h2>Install</h2>
+    <div class="steps">
+      <div>
+        <h3>Windows</h3>
+        <ol>
+          <li>Right-click the zip, choose Properties, tick Unblock, then extract it.</li>
+          <li>Copy the <code>OmniChain.vst3</code> folder to <code>C:\Program Files\Common Files\VST3\</code>.</li>
+          <li>Rescan plugins in your DAW. In FL Studio: Options, Manage plugins, Find installed plugins.</li>
+        </ol>
+      </div>
+      <div>
+        <h3>macOS</h3>
+        <ol>
+          <li>Copy <code>OmniChain.component</code> to <code>~/Library/Audio/Plug-Ins/Components/</code> and <code>OmniChain.vst3</code> to <code>~/Library/Audio/Plug-Ins/VST3/</code>.</li>
+          <li>OmniChain isn't notarised by Apple, so allow it once in Terminal:
+            <pre><code>xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/OmniChain.component ~/Library/Audio/Plug-Ins/VST3/OmniChain.vst3</code></pre></li>
+          <li>Open Logic or your DAW. OmniChain is under Audio FX.</li>
+        </ol>
+      </div>
+      <div>
+        <h3>Linux</h3>
+        <ol>
+          <li>Extract and copy the formats you need:
+            <pre><code>tar xzf OmniChain-Linux.tar.gz && cd OmniChain-Linux
+mkdir -p ~/.vst3 ~/.lv2 ~/.clap
+cp -r OmniChain.vst3 ~/.vst3/
+cp -r OmniChain.lv2 ~/.lv2/
+cp OmniChain.clap ~/.clap/</code></pre></li>
+          <li>Rescan plugins in your host.</li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <div class="pair">
+      <img src="img/creative.jpg" width="1220" height="790" loading="lazy" alt="Eight of the newer effects in one chain: Guitar Synth, Melt, Tap Ensemble, Barber Pole, Radio Tuner, Orbit, Chaos Echo and Ghost Verb.">
+      <div>
+        <h2>Sounds you won't find on a pedalboard</h2>
+        <p>Guitar Synth turns single notes into a synth voice. Melt bends every note down like a tape left in the sun. Ghost Verb stays quiet while you play and swells when you stop. Orbit flies your sound around your head.</p>
+        <p>Open the preset menu and try Chaos Garden, Melting Clock or Orbiting Satellite.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span id="version">OmniChain is free and open source (GPLv3).</span>
+    <span><a href="https://github.com/davepomerlo/omnichain">Source code on GitHub</a></span>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var base = "https://github.com/davepomerlo/omnichain/releases/latest/download/";
+    var files = { Windows: "OmniChain-Windows.zip", macOS: "OmniChain-macOS.zip", Linux: "OmniChain-Linux.tar.gz" };
+    var ua = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || "";
+    var os = /win/i.test(ua) ? "Windows" : /mac|iphone|ipad/i.test(ua) ? "macOS" : /linux|x11/i.test(ua) && !/android/i.test(navigator.userAgent) ? "Linux" : null;
+    if (os) {
+      document.getElementById("main-download").href = base + files[os];
+      document.getElementById("main-label").textContent = "Download for " + os;
+      var others = Object.keys(files).filter(function (k) { return k !== os; });
+      document.getElementById("others").innerHTML = "Also for " + others.map(function (k) {
+        return '<a href="' + base + files[k] + '">' + k + "</a>";
+      }).join(" and ");
+    }
+    // show the current version number from the latest GitHub release
+    fetch("https://api.github.com/repos/davepomerlo/omnichain/releases/latest")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (rel) {
+        if (!rel || !rel.tag_name) return;
+        document.getElementById("fine").textContent = "Version " + rel.tag_name.replace(/^v/, "") + ". Free and open source. No account, no installer, no tracking.";
+        document.getElementById("version").textContent = "OmniChain " + rel.tag_name + " is free and open source (GPLv3).";
+      })
+      .catch(function () {});
+  })();
+</script>
+</body>
+</html>
