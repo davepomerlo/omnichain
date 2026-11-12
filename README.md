@@ -6,12 +6,31 @@ and the plugin reports **0 samples of latency**. A full 8-slot chain uses about 
 
 **Download page: https://davepomerlo.github.io/omnichain/**
 
+## Play without a DAW: the OmniChain app
+
+OmniChain also runs as its own app on a Windows or Mac laptop. Plug in your guitar interface and play.
+* **Windows:** `OmniChain-Windows-Setup.exe` installs the app with a Start-menu shortcut (and optionally the VST3/CLAP plugins).
+* **Mac:** open `OmniChain-macOS-App.dmg` and drag OmniChain into Applications. The first time, right-click the app and choose **Open**.
+
+The app adds a toolbar the plugin doesn't need:
+* **Audio settings:** pick your interface, input channel, sample rate and buffer size. On Windows, choose your interface's
+  **ASIO** driver for the lowest latency (or "Windows Audio (Exclusive Mode)" if it has none). Smaller buffers mean lower latency.
+* **Input:** your guitar input starts *muted* so laptop speakers can't feed back. Click it to turn it on. Use headphones or an interface.
+* **Tempo + Tap:** sets the tempo for synced delays, tremolos, glitch, step filter and arpeggiator. Tap four times in time.
+* **Metronome** with volume. It's not recorded.
+* **Tuner:** a big, accurate tuner (within 0.2 cents in testing). The output is muted while it's open.
+* **Record:** saves what you play, with all effects, as a 24-bit WAV in `Documents/OmniChain Recordings`. **Recordings** opens the folder.
+
+The app remembers your last sound, audio device and tempo between launches.
+
 ## Downloads: pick your system
 
 Get the latest version from the **Releases** page (right-hand side of the repo page):
 
 | Download | Contains | Use it in |
 |---|---|---|
+| **OmniChain-Windows-Setup.exe** | Installer: app + optional VST3/CLAP | Easiest way on Windows |
+| **OmniChain-macOS-App.dmg** | The standalone Mac app | Play without a DAW on a Mac |
 | **OmniChain-Windows.zip** | `OmniChain.vst3`, `OmniChain.clap`, `OmniChain.exe` | FL Studio, Ableton Live, Cubase, Reaper, Studio One, Bitwig, Cakewalk, Reason, … |
 | **OmniChain-macOS.zip** (Apple Silicon + Intel, macOS 11+) | `OmniChain.component` (AU), `OmniChain.vst3`, `OmniChain.clap`, `OmniChain.app` | Logic Pro, GarageBand, MainStage (AU); Ableton, Cubase, Reaper, Studio One, Bitwig, FL Studio Mac (VST3) |
 | **OmniChain-Linux.tar.gz** (x86-64) | `OmniChain.vst3`, `OmniChain.lv2`, `OmniChain.clap`, standalone `OmniChain` | Reaper, Bitwig, Ardour, Carla, Qtractor, … |
@@ -183,5 +202,6 @@ Adding an effect: add an entry to the `EffectType` enum and the `kInfos` table (
 write a class in `Effects.cpp`, and add it to `createEffect()`. The GUI and automation pick it up automatically.
 
 Licence note: built on JUCE 7 under its GPLv3 option, which is fine for personal use and for sharing the source under GPLv3.
-NAM support uses NeuralAmpModelerCore (MIT, Steven Atkinson) and Eigen (MPL2). CLAP support uses clap-juce-extensions (MIT). NAM captures and IRs belong to their creators.
+NAM support uses NeuralAmpModelerCore (MIT, Steven Atkinson) and Eigen (MPL2). CLAP support uses clap-juce-extensions (MIT).
+The Windows app uses the Steinberg ASIO SDK under its GPLv3 licence option. ASIO is a trademark of Steinberg Media Technologies GmbH. NAM captures and IRs belong to their creators.
 Check each pack's terms before redistributing it.

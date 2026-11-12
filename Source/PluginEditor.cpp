@@ -1,4 +1,7 @@
 #include "PluginEditor.h"
+#if JucePlugin_Build_Standalone
+ #include <juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>
+#endif
 
 using namespace juce;
 
@@ -92,7 +95,8 @@ void LookAndFeel::drawButtonBackground (Graphics& g, Button& b, const Colour&, b
         g.drawLine (cx, cy - rad - 1.5f, cx, cy - 1.0f, 1.8f);
         return;
     }
-    g.setColour (knobBody.brighter (down ? 0.3f : (over ? 0.15f : 0.0f)));
+    const bool on = b.getToggleState() && b.getClickingTogglesState();
+    g.setColour ((on ? b.findColour (TextButton::buttonOnColourId) : knobBody).brighter (down ? 0.3f : (over ? 0.15f : 0.0f)));
     g.fillRoundedRectangle (r, 5.0f);
 }
 
@@ -452,6 +456,197 @@ void SlotCard::showMenu()
 }
 
 // =====================================================================================
+TunerOverlay::TunerOverlay (OmniChainProcessor& p) : proc (p)
+{
+    setInterceptsMouseClicks (true, false);
+}
+
+void TunerOverlay::timerCallback()
+{
+    proc.copyTunerInput (scratch.data(), (int) scratch.size());
+    const auto r = yin.detect (scratch.data(), (int) scratch.size(), proc.getSampleRate());
+    if (r.hz > 0.0f && r.clarity > 0.6f) { shown = r; holdFrames = 12; }
+    else if (holdFrames > 0) --holdFrames;
+    else shown = {};
+    needle += ((shown.hz > 0 ? shown.cents : 0.0f) - needle) * 0.45f;
+    repaint();
+}
+
+void TunerOverlay::paint (Graphics& g)
+{
+    g.setColour (ocui::bg0);
+    g.fillRoundedRectangle (getLocalBounds().toFloat(), 14.0f);
+    g.setColour (ocui::track);
+    g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 14.0f, 1.0f);
+    auto r = getLocalBounds().reduced (30);
+    const bool has = shown.hz > 0.0f;
+    const bool inTune = has && std::abs (shown.cents) < 3.0f;
+    const Colour good (0xff4fd1a0), off (0xffffc94d);
+
+    g.setColour (has ? (inTune ? good : ocui::text) : ocui::textDim);
+    g.setFont (Font (150.0f, Font::bold));
+    auto noteArea = r.removeFromTop (r.getHeight() / 2);
+    g.drawText (has ? String (oc::YinTuner::noteName (shown.midi)) : String ("--"), noteArea, Justification::centredBottom);
+    if (has)
+    {
+        g.setFont (Font (28.0f, Font::bold));
+        g.setColour (ocui::textDim);
+        g.drawText (String (shown.midi / 12 - 1), noteArea.withTrimmedLeft (noteArea.getWidth() / 2 + 70).withTrimmedBottom (20), Justification::bottomLeft);
+    }
+
+    // cents scale
+    auto scale = r.removeFromTop (70).reduced (jmax (40, r.getWidth() / 6), 10).toFloat();
+    g.setColour (ocui::track);
+    g.fillRoundedRectangle (scale.withSizeKeepingCentre (scale.getWidth(), 6.0f), 3.0f);
+    for (int c = -50; c <= 50; c += 10)
+    {
+        const float x = scale.getX() + scale.getWidth() * (float) (c + 50) / 100.0f;
+        const float h = c == 0 ? 34.0f : (c % 50 == 0 ? 22.0f : 14.0f);
+        g.setColour (c == 0 ? good : ocui::textDim);
+        g.fillRect (x - (c == 0 ? 1.5f : 0.75f), scale.getCentreY() - h * 0.5f, c == 0 ? 3.0f : 1.5f, h);
+    }
+    if (has)
+    {
+        const float x = scale.getX() + scale.getWidth() * (jlimit (-50.0f, 50.0f, needle) + 50.0f) / 100.0f;
+        g.setColour (inTune ? good : off);
+        g.fillRoundedRectangle (x - 4.0f, scale.getCentreY() - 24.0f, 8.0f, 48.0f, 4.0f);
+    }
+    g.setFont (Font (18.0f));
+    g.setColour (ocui::textDim);
+    String info = has ? (String (shown.cents >= 0 ? "+" : "") + String (shown.cents, 1) + " cents   |   " + String (shown.hz, 2) + " Hz")
+                      : String ("Play a single open string");
+    g.drawText (info, r.removeFromTop (40), Justification::centred);
+    g.setFont (Font (13.0f));
+    g.drawText ("Output is muted while the tuner is on. Click anywhere here or press Tuner again to close.", r.removeFromTop (30), Justification::centred);
+}
+
+// =====================================================================================
+StandaloneBar::StandaloneBar (OmniChainProcessor& p) : proc (p)
+{
+    for (auto* b : { &audioBtn, &inputBtn, &tapBtn, &metroBtn, &tunerBtn, &recBtn, &folderBtn }) addAndMakeVisible (*b);
+    for (auto* b : { &inputBtn, &metroBtn, &tunerBtn, &recBtn })
+    {
+        b->setClickingTogglesState (true);
+        b->setColour (TextButton::buttonOnColourId, Colour (0xff35518a));
+    }
+    recBtn.setColour (TextButton::buttonOnColourId, Colour (0xffb3262e));
+    inputBtn.setColour (TextButton::buttonOnColourId, Colour (0xff1f7a5a));
+    audioBtn.setTooltip ("Choose your audio interface, inputs, sample rate and buffer size (smaller buffer = lower latency)");
+    inputBtn.setTooltip ("Turn your guitar input on or off. It starts muted to avoid feedback through laptop speakers.");
+    tapBtn.setTooltip ("Tap four times in time to set the tempo for synced delays, tremolos, glitches and arps");
+    recBtn.setTooltip ("Record what you play (with all effects) to a WAV file in Documents/OmniChain Recordings");
+
+    audioBtn.onClick = []
+    {
+       #if JucePlugin_Build_Standalone
+        if (auto* h = StandalonePluginHolder::getInstance()) h->showAudioSettingsDialog();
+       #endif
+    };
+    inputBtn.onClick = [this]
+    {
+       #if JucePlugin_Build_Standalone
+        if (auto* h = StandalonePluginHolder::getInstance()) h->getMuteInputValue() = ! inputBtn.getToggleState();
+       #endif
+    };
+    tapBtn.onClick = [this] { tap(); };
+    metroBtn.onClick = [this] { proc.metronomeOn = metroBtn.getToggleState(); };
+    tunerBtn.onClick = [this] { proc.tunerOn = tunerBtn.getToggleState(); };
+    recBtn.onClick = [this]
+    {
+        if (recBtn.getToggleState()) { if (! proc.startRecording()) recBtn.setToggleState (false, dontSendNotification); }
+        else proc.stopRecording();
+    };
+    folderBtn.onClick = [] { OmniChainProcessor::getRecordingsFolder().startAsProcess(); };
+
+    bpm.setSliderStyle (Slider::LinearHorizontal);
+    bpm.setTextBoxStyle (Slider::TextBoxLeft, false, 64, 22);
+    bpm.setRange (30.0, 300.0, 1.0);
+    bpm.setTextValueSuffix (" BPM");
+    bpm.setValue (proc.hostlessBpm.load(), dontSendNotification);
+    bpm.setDoubleClickReturnValue (true, 120.0);
+    bpm.setColour (Slider::trackColourId, Colour (0xff7c9cff));
+    bpm.setColour (Slider::textBoxOutlineColourId, Colours::transparentBlack);
+    bpm.onValueChange = [this] { proc.hostlessBpm = (float) bpm.getValue(); };
+    bpm.setTooltip ("Song tempo for tempo-synced effects (no DAW = no tempo, so set it here)");
+    addAndMakeVisible (bpm);
+
+    metroVol.setSliderStyle (Slider::LinearHorizontal);
+    metroVol.setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
+    metroVol.setRange (0.0, 1.0);
+    metroVol.setValue (proc.metronomeVol.load(), dontSendNotification);
+    metroVol.setColour (Slider::trackColourId, Colour (0xff7c9cff));
+    metroVol.onValueChange = [this] { proc.metronomeVol = (float) metroVol.getValue(); };
+    metroVol.setTooltip ("Metronome volume");
+    addAndMakeVisible (metroVol);
+
+    recTime.setFont (Font (13.0f, Font::bold));
+    recTime.setColour (Label::textColourId, Colour (0xffff6b6b));
+    addAndMakeVisible (recTime);
+    startTimerHz (10);
+}
+
+void StandaloneBar::tap()
+{
+    const double now = Time::getMillisecondCounterHiRes();
+    if (! taps.isEmpty() && now - taps.getLast() > 2000.0) taps.clear();
+    taps.add (now);
+    while (taps.size() > 5) taps.remove (0);
+    if (taps.size() >= 2)
+    {
+        const double avg = (taps.getLast() - taps.getFirst()) / (taps.size() - 1);
+        bpm.setValue (jlimit (30.0, 300.0, std::round (60000.0 / avg)), sendNotificationSync);
+    }
+}
+
+void StandaloneBar::timerCallback()
+{
+   #if JucePlugin_Build_Standalone
+    if (auto* h = StandalonePluginHolder::getInstance())
+    {
+        const bool live = ! (bool) h->getMuteInputValue().getValue();
+        inputBtn.setToggleState (live, dontSendNotification);
+        inputBtn.setButtonText (live ? "Input: on" : "Input: muted");
+    }
+   #endif
+    tunerBtn.setToggleState (proc.tunerOn.load(), dontSendNotification);
+    recBtn.setToggleState (proc.isRecording(), dontSendNotification);
+    recBtn.setButtonText (proc.isRecording() ? "Stop" : "Record");
+    if (proc.isRecording())
+    {
+        const int t = (int) proc.getRecordingSeconds();
+        recTime.setText (String (t / 60) + ":" + String (t % 60).paddedLeft ('0', 2), dontSendNotification);
+    }
+    else recTime.setText (proc.lastRecording.existsAsFile() ? "Saved" : "", dontSendNotification);
+    if (! bpm.isMouseButtonDown() && std::abs (bpm.getValue() - proc.hostlessBpm.load()) > 0.5) bpm.setValue (proc.hostlessBpm.load(), dontSendNotification);
+}
+
+void StandaloneBar::paint (Graphics& g)
+{
+    g.setColour (ocui::bg1.brighter (0.06f));
+    g.fillRoundedRectangle (getLocalBounds().toFloat(), 8.0f);
+    if (proc.isRecording())
+    {
+        g.setColour (Colour (0xffff4d4d));
+        g.fillEllipse (recBtn.getRight() + 8.0f, (float) getHeight() * 0.5f - 5.0f, 10.0f, 10.0f);
+    }
+}
+
+void StandaloneBar::resized()
+{
+    auto r = getLocalBounds().reduced (8, 6);
+    audioBtn.setBounds (r.removeFromLeft (120)); r.removeFromLeft (8);
+    inputBtn.setBounds (r.removeFromLeft (112)); r.removeFromLeft (22);
+    bpm.setBounds (r.removeFromLeft (230)); r.removeFromLeft (6);
+    tapBtn.setBounds (r.removeFromLeft (52)); r.removeFromLeft (22);
+    metroBtn.setBounds (r.removeFromLeft (96)); r.removeFromLeft (6);
+    metroVol.setBounds (r.removeFromLeft (90)); r.removeFromLeft (22);
+    tunerBtn.setBounds (r.removeFromLeft (72));
+    folderBtn.setBounds (r.removeFromRight (100)); r.removeFromRight (8);
+    recTime.setBounds (r.removeFromRight (56)); r.removeFromRight (22);
+    recBtn.setBounds (r.removeFromRight (80));
+}
+
+// =====================================================================================
 OmniChainEditor::OmniChainEditor (OmniChainProcessor& p) : AudioProcessorEditor (&p), proc (p)
 {
     setLookAndFeel (&lnf);
@@ -492,7 +687,13 @@ OmniChainEditor::OmniChainEditor (OmniChainProcessor& p) : AudioProcessorEditor 
     outAtt = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "out", outKnob.slider);
     for (auto* k : { &inKnob, &mixKnob, &outKnob }) k->slider.onValueChange();
 
-    setSize (1220, 790);
+    if (proc.isStandalone())
+    {
+        standaloneBar = std::make_unique<StandaloneBar> (proc);
+        addAndMakeVisible (*standaloneBar);
+    }
+    addChildComponent (tunerOverlay);
+    setSize (1220, proc.isStandalone() ? 836 : 790);
     startTimerHz (30);
 }
 
@@ -560,6 +761,7 @@ void OmniChainEditor::loadPreset()
 void OmniChainEditor::timerCallback()
 {
     for (auto& c : cards) c->refresh();
+    if (tunerOverlay.isVisible() != proc.tunerOn.load()) { tunerOverlay.setVisible (proc.tunerOn.load()); if (tunerOverlay.isVisible()) tunerOverlay.toFront (false); }
     const float decay = 0.86f;
     const float i = proc.engine.takeInPeak(), o = proc.engine.takeOutPeak();
     inLvl = jmax (i, inLvl * decay); outLvl = jmax (o, outLvl * decay);
@@ -645,8 +847,10 @@ void OmniChainEditor::resized()
     prevBtn.setBounds (pr.removeFromLeft (28));  pr.removeFromLeft (4);
     presetBox.setBounds (pr);
 
+    if (standaloneBar != nullptr) standaloneBar->setBounds (area.removeFromTop (46).reduced (16, 2));
     area.removeFromBottom (26);
     area.reduce (16, 4);
+    tunerOverlay.setBounds (area.reduced (60, 40));
     const int gapX = 22, gapY = 26;
     const int cw = (area.getWidth() - 3 * gapX) / 4, ch = (area.getHeight() - gapY) / 2;
     for (int i = 0; i < oc::kNumSlots; ++i)

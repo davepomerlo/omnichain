@@ -27,7 +27,11 @@ OmniChainProcessor::OmniChainProcessor()
     startTimerHz (40);
 }
 
-OmniChainProcessor::~OmniChainProcessor() { stopTimer(); }
+OmniChainProcessor::~OmniChainProcessor()
+{
+    stopTimer();
+    stopRecording();
+}
 
 AudioProcessorValueTreeState::ParameterLayout OmniChainProcessor::createLayout()
 {
@@ -94,15 +98,25 @@ void OmniChainProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
 
     oc::Context ctx;
     ctx.sampleRate = getSampleRate();
+    bool hostTempo = false;
     if (auto* ph = getPlayHead())
         if (auto pos = ph->getPosition())
         {
-            if (auto b = pos->getBpm()) ctx.bpm = *b;
+            if (auto b = pos->getBpm()) { ctx.bpm = *b; hostTempo = true; }
             if (auto p = pos->getPpqPosition()) ctx.ppq = *p;
             ctx.playing = pos->getIsPlaying();
         }
+    if (! hostTempo) ctx.bpm = jlimit (30.0, 300.0, (double) hostlessBpm.load());
 
     float* L = buffer.getWritePointer (0);
+    const bool tuning = tunerOn.load (std::memory_order_relaxed);
+    if (tuning)
+    {
+        const float* inR = numIn > 1 ? buffer.getReadPointer (1) : L;
+        int w = tunerWrite.load (std::memory_order_relaxed);
+        for (int i = 0; i < n; ++i) { tunerRing[(size_t) w] = 0.5f * (L[i] + inR[i]); w = (w + 1) & (kTunerRing - 1); }
+        tunerWrite.store (w, std::memory_order_release);
+    }
     if (numOut >= 2)
     {
         float* R = buffer.getWritePointer (1);
@@ -123,6 +137,46 @@ void OmniChainProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
             done += m;
         }
     }
+
+    // recorder: the chain's output (before the metronome click)
+    if (activeWriter.load (std::memory_order_acquire) != nullptr)
+    {
+        const ScopedTryLock sl (writerLock);
+        if (sl.isLocked())
+            if (auto* wr = activeWriter.load())
+            {
+                const float* chans[2] = { buffer.getReadPointer (0), buffer.getReadPointer (numOut > 1 ? 1 : 0) };
+                wr->write (chans, n);
+                recordedSamples += n;
+            }
+    }
+
+    if (tuning) { buffer.clear(); return; }    // mute while tuning
+
+    if (metronomeOn.load (std::memory_order_relaxed))
+    {
+        const double spb = 60.0 / ctx.bpm * ctx.sampleRate;
+        const float vol = metronomeVol.load() * 0.5f;
+        const float decay = std::exp (-1.0f / (0.018f * (float) ctx.sampleRate));
+        for (int i = 0; i < n; ++i)
+        {
+            metroPos += 1.0;
+            if (metroBeat < 0 || metroPos >= spb)
+            {
+                metroPos = metroBeat < 0 ? 0.0 : metroPos - spb;
+                metroBeat = (metroBeat + 1) % 4;
+                clickEnv = 1.0f; clickPhase = 0.0f; clickFreq = metroBeat == 0 ? 2000.0f : 1400.0f;
+            }
+            if (clickEnv > 1.0e-4f)
+            {
+                clickPhase += clickFreq / (float) ctx.sampleRate;
+                const float c = std::sin (MathConstants<float>::twoPi * clickPhase) * clickEnv * vol;
+                clickEnv *= decay;
+                for (int ch = 0; ch < numOut; ++ch) buffer.getWritePointer (ch)[i] += c;
+            }
+        }
+    }
+    else metroBeat = -1;
 }
 
 AudioProcessorEditor* OmniChainProcessor::createEditor() { return new OmniChainEditor (*this); }
@@ -148,6 +202,8 @@ void OmniChainProcessor::getStateInformation (MemoryBlock& destData)
     auto state = apvts.copyState();
     state.setProperty ("presetName", currentPresetName, nullptr);
     state.setProperty ("formatVersion", 1, nullptr);
+    state.setProperty ("bpm", hostlessBpm.load(), nullptr);
+    state.setProperty ("metronomeVol", metronomeVol.load(), nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, destData);
 }
 
@@ -158,6 +214,8 @@ void OmniChainProcessor::setStateInformation (const void* data, int sizeInBytes)
         {
             apvts.replaceState (ValueTree::fromXml (*xml));
             currentPresetName = apvts.state.getProperty ("presetName", "Custom").toString();
+            hostlessBpm = (float) (double) apvts.state.getProperty ("bpm", 120.0);
+            metronomeVol = (float) (double) apvts.state.getProperty ("metronomeVol", 0.5);
             reloadResourcesFromState();
             if (MessageManager::existsAndIsCurrentThread()) engine.service();
         }
@@ -402,6 +460,51 @@ String OmniChainProcessor::getSlotFileText (int slot, int& severity)
         txt << "  |  model is " << String (res->sampleRate / 1000.0, 1) << " kHz, project " << String (sr / 1000.0, 1) << " kHz";
     }
     return txt;
+}
+
+// ------------------------------------------------------------------ standalone helpers
+void OmniChainProcessor::copyTunerInput (float* dest, int n) const
+{
+    const int w = tunerWrite.load (std::memory_order_acquire);
+    for (int i = 0; i < n; ++i) dest[i] = tunerRing[(size_t) ((w - n + i) & (kTunerRing - 1))];
+}
+
+File OmniChainProcessor::getRecordingsFolder()
+{
+    auto f = File::getSpecialLocation (File::userDocumentsDirectory).getChildFile ("OmniChain Recordings");
+    if (! f.exists()) f.createDirectory();
+    return f;
+}
+
+bool OmniChainProcessor::startRecording()
+{
+    stopRecording();
+    const double sr = getSampleRate();
+    if (sr <= 0) return false;
+    auto file = getRecordingsFolder().getNonexistentChildFile ("OmniChain " + Time::getCurrentTime().formatted ("%Y-%m-%d %H-%M-%S"), ".wav");
+    auto stream = file.createOutputStream();
+    if (stream == nullptr) return false;
+    WavAudioFormat wav;
+    std::unique_ptr<OutputStream> os (stream.release());
+    auto* writer = wav.createWriterFor (os.get(), sr, 2, 24, {}, 0);
+    if (writer == nullptr) return false;
+    os.release();   // the writer owns the stream now
+    writerThread.startThread();
+    threadedWriter = std::make_unique<AudioFormatWriter::ThreadedWriter> (writer, writerThread, 32768);
+    recordedSamples = 0;
+    lastRecording = file;
+    const ScopedLock sl (writerLock);
+    activeWriter = threadedWriter.get();
+    return true;
+}
+
+void OmniChainProcessor::stopRecording()
+{
+    {
+        const ScopedLock sl (writerLock);
+        activeWriter = nullptr;
+    }
+    threadedWriter.reset();   // flushes and closes the file
 }
 
 AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new OmniChainProcessor(); }

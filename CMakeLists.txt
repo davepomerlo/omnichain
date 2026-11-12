@@ -96,6 +96,15 @@ else()
     message(STATUS "clap-juce-extensions not found - skipping the CLAP format")
 endif()
 
+# ASIO (Windows standalone app): Steinberg ASIO SDK under its GPLv3 licence option
+#   https://download.steinberg.net/sdk_downloads/ASIO-SDK_2.3.4_2025-10-15.zip -> ThirdParty/asiosdk
+set(ASIO_SDK_PATH "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/asiosdk" CACHE PATH "Path to the ASIO SDK")
+if(WIN32 AND EXISTS "${ASIO_SDK_PATH}/common/iasiodrv.h")
+    target_compile_definitions(OmniChain PUBLIC JUCE_ASIO=1)
+    target_include_directories(OmniChain PUBLIC "${ASIO_SDK_PATH}/common")
+    message(STATUS "ASIO support enabled")
+endif()
+
 if(MINGW)
     # Self-contained binaries: no libc++ / pthread DLLs needed on the target machine
     target_link_options(OmniChain_VST3 PRIVATE -static)

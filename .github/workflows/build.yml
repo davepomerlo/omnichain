@@ -74,6 +74,17 @@ jobs:
           git -C ThirdParty/clap-juce-extensions checkout $CLAP_JUCE_COMMIT
           git -C ThirdParty/clap-juce-extensions submodule update --init --recursive
 
+      - name: ASIO SDK (Windows, GPLv3 licence option)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          curl -fL -o asiosdk.zip https://download.steinberg.net/sdk_downloads/ASIO-SDK_2.3.4_2025-10-15.zip
+          unzip -q asiosdk.zip -d asio_tmp
+          H=$(find asio_tmp -name iasiodrv.h | head -1)
+          test -n "$H"
+          mv "$(dirname "$(dirname "$H")")" ThirdParty/asiosdk
+          ls ThirdParty/asiosdk/common
+
       - name: Linux system packages
         if: runner.os == 'Linux'
         run: |
@@ -109,6 +120,13 @@ jobs:
           Copy-Item "$a/Standalone/OmniChain.exe" "$out/"
           Copy-Item "README.md" "$out/"
           Compress-Archive -Path $out -DestinationPath "OmniChain-Windows.zip" -Force
+          # Installer (app + optional VST3/CLAP, Start menu + desktop shortcut)
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
+          $env:OMNI_VERSION = "${{ inputs.release || github.ref_name }}"
+          & $iscc "installer\OmniChain.iss"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-Item "OmniChain-Windows-Setup.exe" | Format-List Name, Length
 
       - name: Sign, validate and package (macOS)
         if: runner.os == 'macOS'
@@ -129,6 +147,9 @@ jobs:
           auval -a | grep -i omni || true
           auval -strict -v aufx Omc1 Omch
           ditto -c -k --sequesterRsrc --keepParent $OUT OmniChain-macOS.zip
+          # Drag-to-Applications disk image for the standalone app
+          mkdir -p dmg && cp -R $OUT/OmniChain.app dmg/ && ln -s /Applications dmg/Applications
+          hdiutil create -volname "OmniChain" -srcfolder dmg -ov -format UDZO OmniChain-macOS-App.dmg
 
       - name: Validate and package (Linux)
         if: runner.os == 'Linux'
@@ -151,7 +172,9 @@ jobs:
           name: OmniChain-${{ matrix.platform }}
           path: |
             OmniChain-Windows.zip
+            OmniChain-Windows-Setup.exe
             OmniChain-macOS.zip
+            OmniChain-macOS-App.dmg
             OmniChain-Linux.tar.gz
           if-no-files-found: error
 

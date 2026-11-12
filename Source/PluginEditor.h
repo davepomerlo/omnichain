@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
+#include "dsp/Tuner.h"
 
 namespace ocui
 {
@@ -84,6 +85,40 @@ private:
     std::unique_ptr<BA> powerAtt;
 };
 
+// Big tuner readout shown over the chain while the tuner is on (standalone app)
+class TunerOverlay : public juce::Component, private juce::Timer
+{
+public:
+    explicit TunerOverlay (OmniChainProcessor& p);
+    void paint (juce::Graphics&) override;
+    void mouseUp (const juce::MouseEvent&) override { proc.tunerOn = false; }
+    void visibilityChanged() override { if (isVisible()) startTimerHz (20); else stopTimer(); }
+private:
+    void timerCallback() override;
+    OmniChainProcessor& proc;
+    oc::YinTuner yin;
+    std::vector<float> scratch = std::vector<float> (4096, 0.0f);
+    oc::TunerReading shown; float needle = 0.0f; int holdFrames = 0;
+};
+
+// Toolbar shown only in the standalone app: audio settings, input mute, tempo, metronome, tuner, recorder
+class StandaloneBar : public juce::Component, private juce::Timer
+{
+public:
+    explicit StandaloneBar (OmniChainProcessor& p);
+    void paint (juce::Graphics&) override;
+    void resized() override;
+private:
+    void timerCallback() override;
+    void tap();
+    OmniChainProcessor& proc;
+    juce::TextButton audioBtn { "Audio settings" }, inputBtn { "Input" }, tapBtn { "Tap" }, metroBtn { "Metronome" },
+                     tunerBtn { "Tuner" }, recBtn { "Record" }, folderBtn { "Recordings" };
+    juce::Slider bpm, metroVol;
+    juce::Label recTime;
+    juce::Array<double> taps;
+};
+
 class OmniChainEditor : public juce::AudioProcessorEditor, public juce::DragAndDropContainer, private juce::Timer
 {
 public:
@@ -111,6 +146,8 @@ private:
     float inLvl = 0, outLvl = 0;
     juce::String shownPreset;
     juce::TooltipWindow tooltips { this, 700 };
+    std::unique_ptr<StandaloneBar> standaloneBar;
+    TunerOverlay tunerOverlay { proc };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OmniChainEditor)
 };

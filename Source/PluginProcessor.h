@@ -56,6 +56,20 @@ public:
     static juce::File getContentFolder (bool nam);
     juce::File lastFileFolder;
 
+    // ---- standalone-app helpers (also harmless inside a DAW) ----
+    bool isStandalone() const { return wrapperType == wrapperType_Standalone; }
+    std::atomic<float> hostlessBpm { 120.0f };   // tempo used when the host gives none (standalone app)
+    std::atomic<bool> metronomeOn { false };
+    std::atomic<float> metronomeVol { 0.5f };
+    std::atomic<bool> tunerOn { false };
+    void copyTunerInput (float* dest, int n) const;  // newest n mono input samples (message thread)
+    bool startRecording();
+    void stopRecording();
+    bool isRecording() const { return activeWriter.load() != nullptr; }
+    double getRecordingSeconds() const { return getSampleRate() > 0 ? (double) recordedSamples.load() / getSampleRate() : 0.0; }
+    juce::File lastRecording;
+    static juce::File getRecordingsFolder();
+
     juce::AudioProcessorValueTreeState apvts;
     oc::Engine engine;
     juce::String currentPresetName { "Init (empty chain)" };
@@ -73,6 +87,16 @@ private:
 
     int currentProgram = 0;
     std::vector<float> monoScratch;
+
+    static constexpr int kTunerRing = 8192;
+    std::vector<float> tunerRing = std::vector<float> ((size_t) kTunerRing, 0.0f);
+    std::atomic<int> tunerWrite { 0 };
+    double metroPos = 0.0; int metroBeat = -1; float clickEnv = 0.0f, clickPhase = 0.0f, clickFreq = 1400.0f;
+    juce::TimeSliceThread writerThread { "OmniChain recorder" };
+    std::unique_ptr<juce::AudioFormatWriter::ThreadedWriter> threadedWriter;
+    juce::CriticalSection writerLock;
+    std::atomic<juce::AudioFormatWriter::ThreadedWriter*> activeWriter { nullptr };
+    std::atomic<juce::int64> recordedSamples { 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OmniChainProcessor)
 };

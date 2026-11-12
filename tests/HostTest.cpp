@@ -186,6 +186,44 @@ int main (int argc, char** argv)
         for (int i = 0; i < p.getNumPrograms(); ++i) if (p.getProgramName (i).startsWith ("Holdsworth-Style Legato")) { p.setCurrentProgram (i); p.engine.service(); snapshot (p, outDir + "/omnichain_holdsworth.png"); }
     }
 
+
+    // 8. standalone-app features: toolbar, tempo, recorder, tuner, metronome
+    {
+        AudioProcessor::setTypeOfNextNewPlugin (AudioProcessor::wrapperType_Standalone);
+        OmniChainProcessor ps;
+        AudioProcessor::setTypeOfNextNewPlugin (AudioProcessor::wrapperType_Undefined);
+        CHECK (ps.isStandalone(), "standalone flavour");
+        ps.setPlayConfigDetails (2, 2, sr, bs); ps.prepareToPlay (sr, bs);
+        for (int i = 0; i < ps.getNumPrograms(); ++i) if (ps.getProgramName (i) == "Singing Lead") ps.setCurrentProgram (i);
+        ps.hostlessBpm = 96.0f;
+        ps.engine.service();
+        // record two seconds
+        CHECK (ps.startRecording(), "start recording");
+        bool fin = true; runAudio (ps, int (2.0 * sr / bs), bs, 2, sr, fin);
+        const double secs = ps.getRecordingSeconds();
+        ps.stopRecording();
+        const File rec = ps.lastRecording;
+        std::unique_ptr<AudioFormatReader> rd (WavAudioFormat().createReaderFor (rec.createInputStream().release(), true));
+        CHECK (rd != nullptr && std::abs ((double) rd->lengthInSamples / sr - secs) < 0.05 && secs > 1.9, "recording length");
+        if (rd != nullptr) { Range<float> lv[2]; rd->readMaxLevels (0, rd->lengthInSamples, lv, 2); std::printf ("recorded peak %.2f\n", lv[0].getEnd()); CHECK (lv[0].getEnd() > 0.01f, "recording has audio"); }
+        std::printf ("recorded %.2f s to %s (%lld samples in file)\n", secs, rec.getFileName().toRawUTF8(), rd ? (long long) rd->lengthInSamples : -1LL);
+        rec.deleteFile();
+        // metronome adds clicks even with silent input
+        ps.metronomeOn = true;
+        { AudioBuffer<float> b (2, bs); MidiBuffer m; float pk = 0; for (int k = 0; k < 40; ++k) { b.clear(); ps.processBlock (b, m); pk = jmax (pk, b.getMagnitude (0, bs)); }
+          std::printf ("metronome click peak %.2f\n", pk); CHECK (pk > 0.05f, "metronome audible"); }
+        ps.metronomeOn = false;
+        // tuner: feed an A2 (110 Hz) and show the overlay
+        ps.tunerOn = true;
+        { AudioBuffer<float> b (2, bs); MidiBuffer m; int64 t = 0; float pk = 0;
+          for (int k = 0; k < 40; ++k) { for (int i = 0; i < bs; ++i, ++t) { float x = 0; for (int h = 1; h < 8; ++h) x += std::sin (MathConstants<double>::twoPi * 110.6 * h * t / sr) / h; b.setSample (0, i, x * 0.2f); b.setSample (1, i, x * 0.2f); }
+                                         ps.processBlock (b, m); pk = jmax (pk, b.getMagnitude (0, bs)); }
+          CHECK (pk == 0.0f, "output muted while tuning"); }
+        snapshot (ps, outDir + "/omnichain_standalone_tuner.png");
+        ps.tunerOn = false;
+        snapshot (ps, outDir + "/omnichain_standalone.png");
+    }
+
     std::printf ("\n%s (%d failures)\n", failures ? "FAILED" : "ALL HOST TESTS OK", failures);
     return failures ? 1 : 0;
 }
