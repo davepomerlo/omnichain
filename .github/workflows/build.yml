@@ -30,7 +30,8 @@ jobs:
       - name: Get NAM core + Eigen
         run: |
           git clone --depth 1 --branch $NAM_TAG https://github.com/sdatkinson/NeuralAmpModelerCore.git ThirdParty/NeuralAmpModelerCore
-          git clone --depth 1 --branch $EIGEN_TAG https://gitlab.com/libeigen/eigen.git ThirdParty/eigen
+          for i in 1 2 3; do git clone --depth 1 --branch $EIGEN_TAG https://gitlab.com/libeigen/eigen.git ThirdParty/eigen && break; rm -rf ThirdParty/eigen; sleep 15; done
+          [ -d ThirdParty/eigen ] || git clone --depth 1 --branch $EIGEN_TAG https://github.com/live-clones/eigen.git ThirdParty/eigen   # mirror fallback
       - name: Build and run engine test (all effects, convolver, NAM)
         run: |
           N=ThirdParty/NeuralAmpModelerCore
@@ -69,7 +70,8 @@ jobs:
         run: |
           git clone --depth 1 --branch $JUCE_TAG https://github.com/juce-framework/JUCE.git JUCE
           git clone --depth 1 --branch $NAM_TAG https://github.com/sdatkinson/NeuralAmpModelerCore.git ThirdParty/NeuralAmpModelerCore
-          git clone --depth 1 --branch $EIGEN_TAG https://gitlab.com/libeigen/eigen.git ThirdParty/eigen
+          for i in 1 2 3; do git clone --depth 1 --branch $EIGEN_TAG https://gitlab.com/libeigen/eigen.git ThirdParty/eigen && break; rm -rf ThirdParty/eigen; sleep 15; done
+          [ -d ThirdParty/eigen ] || git clone --depth 1 --branch $EIGEN_TAG https://github.com/live-clones/eigen.git ThirdParty/eigen   # mirror fallback
           git clone https://github.com/free-audio/clap-juce-extensions.git ThirdParty/clap-juce-extensions
           git -C ThirdParty/clap-juce-extensions checkout $CLAP_JUCE_COMMIT
           git -C ThirdParty/clap-juce-extensions submodule update --init --recursive
