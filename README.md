@@ -1,6 +1,6 @@
 # OmniChain: modular multi-FX (VST3)
 
-An 8-slot effects chain where any slot can hold any of 44 built-in effects, plus a **Cab IR loader**
+An 8-slot effects chain where any slot can hold any of 60 built-in effects, plus a **Cab IR loader**
 and a **Neural Amp Modeler (NAM) loader** for free captures of real amps, pedals and cabinets. You can reorder the chain by dragging,
 and the plugin reports **0 samples of latency**. A full 8-slot chain uses about 1–2 % of one CPU core.
 
@@ -74,6 +74,21 @@ cp -r OmniChain.vst3 ~/.vst3/ && cp -r OmniChain.lv2 ~/.lv2/ && cp OmniChain.cla
 The standalone app (`OmniChain.exe` / `OmniChain.app` / `OmniChain`) lets you plug your guitar interface in and play with no DAW needed.
 Set the audio device under *Options → Audio/MIDI settings*.
 
+## Factory library (new in 2.0)
+
+OmniChain now comes with a free library: **58 NAM captures** (clean, crunch and high-gain amps, pedals,
+full rigs, power amps and a bass preamp) and **102 impulse responses** (13 cabinets with 5–7 mic positions each,
+spaces, acoustic bodies and oddities like telephone and megaphone).
+* Click **Load** on a NAM Capture or Cab IR Loader slot. The library appears as a menu, sorted into folders.
+* **Windows installer:** included automatically. **Zips, DMG, Linux:** copy the `OmniChain Library` folder to your
+  **Documents** folder. The Mac app also carries its own copy inside the app.
+* The "Library: ..." presets load complete rigs, for example *Library: JCM2000 Crunch + Green 4x12*.
+* The library also downloads separately as `OmniChain-Library.zip` from the Releases page.
+
+The NAM captures come from the community collection at github.com/pelennor2170/NAM_models (GPLv3, credited in
+`CREDITS.txt`). The IRs were designed mathematically for OmniChain from speaker, microphone and room models. They are
+voiced after classic cabinet styles, but they are not recordings of real cabinets. They're CC0, so use them for anything.
+
 ## Real amps and cabinets for free: NAM captures + cab IRs
 
 **NAM Capture** plays `.nam` files: AI captures of real amps and pedals made by the Neural Amp Modeler community.
@@ -99,6 +114,19 @@ Set the audio device under *Options → Audio/MIDI settings*.
 * **Normalize** (on by default) evens out the volume between captures. **Input** sets how hard you hit the model, like a guitar's volume knob.
 * NAM is the heaviest effect: about 1–10 % of a CPU core per capture, depending on its size. Everything else stays light.
 * Projects and presets remember the file *locations*. If you move or rename the files, the slot shows "File not found". Click Load to point it at the new place.
+
+## What improved in 2.0
+
+* **Cleaner distortion:** Overdrive, Distortion, Amp, Tape and the Ladder filter now run 2x or 4x oversampled, with no added
+  latency. Measured aliasing dropped by 12–28 dB, so high notes and heavy gain sound smoother and less fizzy.
+* **Amp + Cab:** a new **Master** knob and five **Voicings** (Brit Classic, US Clean, Tweed, Modern Gain, Bass Amp).
+* **Overdrive:** four **Voices** (Screamer, Transparent, Blues, Treble Boost). **Distortion:** two new modes, DS hard-clip and HM chainsaw.
+* **Delay:** **Ducking** (echoes step back while you play) and stereo **Spread**. **Reverb:** **Low Cut** and **Width**.
+* **Compressor and Gate:** sidechain low cut, so low notes don't pump them. **EQ:** mid Q and output. **Tape:** 7.5, 15 and 30 ips speeds.
+* **NAM Capture:** captures now play correctly at any project sample rate (they're converted around the capture, not
+  run at the wrong speed). Every capture is auto-levelled, and there's a built-in noise **Gate**.
+* **Smoother knobs:** every continuous knob glides, so automation and fast knob moves no longer zipper.
+* Effects with more than six controls show them in a four-column layout. Projects and presets from 1.x load unchanged.
 
 ## The 1.2 effects in one line each
 
@@ -164,6 +192,8 @@ expression pedal. Any other knob can be linked the same way, for example Freeze 
 | Utility | Stereo Imager (width, mono-bass, Haas, pan) |
 | New in 1.2 | **Wah Pedal** (Cry Baby, Vox, Wide, Bass; pedal, auto, LFO or tempo sweep), **Freeze Pad**, **Step Filter**, **Harmonic Arp**, **Sympathetic Strings**, **Spiral Delay**, **Ghost Verb**, **Amp Feedback** |
 | New in 1.3 | **Tap Ensemble** (8-tap Holdsworth-style chorus), **Guitar Synth** (pitch-tracking synth), **Barber Pole**, **Radio Tuner**, **Orbit**, **Melt**, **Chaos Echo** |
+| New in 2.0: compressors | **FET 76** (with All-In mode), **Opto Leveler**, **Bus Compressor**, **Pedal Compressor**, **Tube Vari-Mu**, **Multiband** (3 bands, phase-aligned) |
+| New in 2.0: effects | **Looper** (45 s, overdub, half/double speed, reverse, bar-synced), **Frequency Shifter**, **Wavefolder**, **Hyper Unison**, **Glass Bells**, **Vinyl**, **Underwater**, **Exciter**, **Doubler**, **Acoustic Simulator** |
 | Loaders | **NAM Capture** (Neural Amp Modeler `.nam`), **Cab IR Loader** (`.wav/.aif/.flac`, zero-latency partitioned convolution) |
 
 ### About "zero latency"

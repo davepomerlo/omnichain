@@ -1,3 +1,5 @@
 build*/
 JUCE
 ThirdParty/
+library/
+__pycache__/

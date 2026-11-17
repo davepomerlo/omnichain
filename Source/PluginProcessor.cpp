@@ -4,8 +4,9 @@
 
 using namespace juce;
 
-static const char* const kSlotParamIds[] = { "type", "byp", "mix", "lvl", "p1", "p2", "p3", "p4", "p5", "p6" };
-constexpr int kNumSlotParamIds = 10;
+static const char* const kSlotParamIds[] = { "type", "byp", "mix", "lvl", "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8" };
+constexpr int kNumSlotParamIds = 12;
+constexpr int kStateFormat = 2;   // 1 = v1.x (6 knobs per slot), 2 = v2.0 (8 knobs, longer Distortion mode list)
 
 OmniChainProcessor::OmniChainProcessor()
     : AudioProcessor (BusesProperties().withInput ("Input", AudioChannelSet::stereo(), true)
@@ -201,7 +202,7 @@ void OmniChainProcessor::getStateInformation (MemoryBlock& destData)
 {
     auto state = apvts.copyState();
     state.setProperty ("presetName", currentPresetName, nullptr);
-    state.setProperty ("formatVersion", 1, nullptr);
+    state.setProperty ("formatVersion", kStateFormat, nullptr);
     state.setProperty ("bpm", hostlessBpm.load(), nullptr);
     state.setProperty ("metronomeVol", metronomeVol.load(), nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, destData);
@@ -216,9 +217,30 @@ void OmniChainProcessor::setStateInformation (const void* data, int sizeInBytes)
             currentPresetName = apvts.state.getProperty ("presetName", "Custom").toString();
             hostlessBpm = (float) (double) apvts.state.getProperty ("bpm", 120.0);
             metronomeVol = (float) (double) apvts.state.getProperty ("metronomeVol", 0.5);
+            migrateOldState ((int) apvts.state.getProperty ("formatVersion", 1));
             reloadResourcesFromState();
             if (MessageManager::existsAndIsCurrentThread()) engine.service();
         }
+}
+
+// Projects and presets saved by v1.x: give the two new knobs their defaults and re-map choice lists that grew.
+void OmniChainProcessor::migrateOldState (int fromVersion)
+{
+    if (fromVersion >= kStateFormat) return;
+    for (int s = 0; s < oc::kNumSlots; ++s)
+    {
+        const int type = getSlotType (s);
+        const auto& info = oc::getInfo (type);
+        for (int k = 6; k < oc::kParamsPerSlot; ++k)
+            setParamValue (param (s, "p" + String (k + 1)), info.params[k].name ? oc::paramToNorm (info.params[k], info.params[k].def) : 0.5f);
+        if (type == oc::FxDistortion)   // Mode had 4 choices, now 6
+        {
+            auto* m = param (s, "p3");
+            const int oldIdx = roundToInt (m->getValue() * 3.0f);
+            setParamValue (m, (float) oldIdx / 5.0f);
+        }
+    }
+    apvts.state.setProperty ("formatVersion", kStateFormat, nullptr);
 }
 
 // ------------------------------------------------------------------ slot helpers
@@ -301,6 +323,13 @@ void OmniChainProcessor::applyPreset (const PresetDef& p)
             if (! std::isnan (ps.mix)) { auto* m = param (s, "mix"); setParamValue (m, m->convertTo0to1 (ps.mix)); }
             auto* l = param (s, "lvl"); setParamValue (l, l->convertTo0to1 (ps.level));
             setParamValue (param (s, "byp"), ps.bypass ? 1.0f : 0.0f);
+            if (ps.file != nullptr)
+            {
+                const auto lib = getLibraryFolder();
+                const auto f = lib.getChildFile (String::fromUTF8 (ps.file));
+                if (lib.isDirectory() && f.existsAsFile()) loadSlotFile (s, f);
+                else slotError[s] = "Needs the OmniChain Library: " + String::fromUTF8 (ps.file).fromLastOccurrenceOf ("/", false, false);
+            }
         }
         else setSlotType (s, oc::FxNone, true);
     }
@@ -321,6 +350,7 @@ bool OmniChainProcessor::savePresetFile (const File& f)
 {
     auto state = apvts.copyState();
     state.setProperty ("presetName", f.getFileNameWithoutExtension(), nullptr);
+    state.setProperty ("formatVersion", kStateFormat, nullptr);
     auto xml = state.createXml();
     if (xml == nullptr || ! xml->writeTo (f)) return false;
     currentPresetName = f.getFileNameWithoutExtension();
@@ -340,6 +370,7 @@ bool OmniChainProcessor::loadPresetFile (const File& f)
             setParamValue (p, p->convertTo0to1 ((float) c.getProperty ("value")));
     }
     for (int s = 0; s < oc::kNumSlots; ++s) setSlotPath (s, tree.getProperty ("res" + String (s + 1)).toString());
+    migrateOldState ((int) tree.getProperty ("formatVersion", 1));
     reloadResourcesFromState();
     currentPresetName = f.getFileNameWithoutExtension();
     return true;
@@ -362,6 +393,41 @@ void OmniChainProcessor::clearSlotResource (int slot)
     engine.setSlotResource (slot, nullptr);
     setSlotPath (slot, {});
     slotError[slot].clear();
+}
+
+// The factory library (NAM captures + IRs) can live in several places; the first one found wins.
+File OmniChainProcessor::getLibraryFolder()
+{
+    const String name ("OmniChain Library");
+    Array<File> c;
+    c.add (File::getSpecialLocation (File::userDocumentsDirectory).getChildFile (name));
+    c.add (File::getSpecialLocation (File::commonApplicationDataDirectory).getChildFile ("OmniChain").getChildFile (name));
+    c.add (File::getSpecialLocation (File::userApplicationDataDirectory).getChildFile ("OmniChain").getChildFile (name));
+   #if JUCE_MAC
+    c.add (File ("~/Library/Application Support/OmniChain").getChildFile (name));
+    c.add (File ("/Library/Application Support/OmniChain").getChildFile (name));
+   #endif
+    const auto exe = File::getSpecialLocation (File::currentExecutableFile);
+    c.add (exe.getSiblingFile (name));
+    c.add (exe.getParentDirectory().getParentDirectory().getChildFile ("Resources").getChildFile (name));
+    c.add (File::getSpecialLocation (File::currentApplicationFile).getSiblingFile (name));
+    for (auto& f : c) if (f.isDirectory()) return f;
+    return {};
+}
+
+// A path saved on another computer (or before the library moved) is re-found inside the local library.
+File OmniChainProcessor::resolveLibraryFile (const File& saved)
+{
+    if (saved.existsAsFile()) return saved;
+    const auto path = saved.getFullPathName().replaceCharacter ('\\', '/');
+    const int i = path.indexOf ("OmniChain Library/");
+    const auto lib = getLibraryFolder();
+    if (i >= 0 && lib.isDirectory())
+    {
+        const auto f = lib.getChildFile (path.substring (i + 18));
+        if (f.existsAsFile()) return f;
+    }
+    return saved;
 }
 
 File OmniChainProcessor::getContentFolder (bool nam)
@@ -436,7 +502,7 @@ void OmniChainProcessor::reloadResourcesFromState()
             slotError[s].clear();
             continue;
         }
-        if (! loadSlotFile (s, f))
+        if (! loadSlotFile (s, resolveLibraryFile (f)))
         {
             engine.setSlotResource (s, nullptr);
             setSlotPath (s, f.getFullPathName());    // keep the path so the project can be fixed later

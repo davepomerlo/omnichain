@@ -18,8 +18,8 @@ struct NoneFx final : Effect
 // =====================================================================================
 struct GateFx final : Effect
 {
-    float det = 0, g = 0; int hold = 0; bool open = false;
-    void reset() override { det = 0; g = 0; hold = 0; open = false; }
+    float det = 0, g = 0; int hold = 0; bool open = false; OnePole scHP;
+    void reset() override { det = 0; g = 0; hold = 0; open = false; scHP.reset(); }
     void process (float* L, float* R, int n, const float* v, const Context&) override
     {
         const float thrO = dbToGain (v[0]), thrC = dbToGain (v[0] - v[5]);
@@ -27,9 +27,11 @@ struct GateFx final : Effect
         const int holdS = int (v[2] * 0.001f * float (sr));
         const float floorG = v[4] <= -79.5f ? 0.0f : dbToGain (v[4]);
         const float detRel = onePoleCoef (12.0f, sr);
+        const bool useHP = v[6] > 20.5f;
+        if (useHP) scHP.setHz (v[6], sr);
         for (int i = 0; i < n; ++i)
         {
-            const float x = maxAbs (L[i], R[i]);
+            const float x = useHP ? std::fabs (scHP.hp ((L[i] + R[i]) * 0.5f)) * 1.2f : maxAbs (L[i], R[i]);
             det = x > det ? x : det * detRel;
             if (det > thrO) { open = true; hold = holdS; }
             else if (det < thrC) { if (hold > 0) --hold; else open = false; }
@@ -44,8 +46,8 @@ struct GateFx final : Effect
 // =====================================================================================
 struct CompFx final : Effect
 {
-    float gr = 0, rms = 0;
-    void reset() override { gr = 0; rms = 0; }
+    float gr = 0, rms = 0; OnePole scHP[2];
+    void reset() override { gr = 0; rms = 0; scHP[0].reset(); scHP[1].reset(); }
     void process (float* L, float* R, int n, const float* v, const Context&) override
     {
         const float thr = v[0], ratio = v[1], makeup = v[4], ch = v[5] * 0.01f;
@@ -55,9 +57,11 @@ struct CompFx final : Effect
         const float aR1 = onePoleCoef (v[3], sr), aR2 = onePoleCoef (v[3] * 3.5f, sr);
         const float rmsC = onePoleCoef (12.0f, sr);
         const float satAmt = ch * 0.6f;
+        const bool useHP = v[6] > 20.5f;
+        if (useHP) { scHP[0].setHz (v[6], sr); scHP[1].a = scHP[0].a; }
         for (int i = 0; i < n; ++i)
         {
-            const float lvl = maxAbs (L[i], R[i]);
+            const float lvl = useHP ? maxAbs (scHP[0].hp (L[i]), scHP[1].hp (R[i])) : maxAbs (L[i], R[i]);
             rms = lvl * lvl + rmsC * (rms - lvl * lvl);
             const float det = lerp (lvl, std::sqrt (rms) * 1.414f, ch * 0.7f);
             const float over = gainToDb (det) - thr;
@@ -122,7 +126,7 @@ struct LimiterFx final : Effect
     static inline float clipper (float x, float ceil, float soft)
     {
         const float u = x / ceil;
-        return ceil * lerp (clampf (u, -1.0f, 1.0f), fastTanh (u * 1.3f) * 1.1605f, soft);
+        return ceil * lerp (clampf (u, -1.0f, 1.0f), clampf (fastTanh (u * 1.3f) * 1.1605f, -1.0f, 1.0f), soft);
     }
     void process (float* L, float* R, int n, const float* v, const Context&) override
     {
@@ -143,11 +147,9 @@ struct LimiterFx final : Effect
             }
             if (mode != 0)
             {
-                l = clampf (clipper (l, ceil, soft), -ceil, ceil);
-                r = clampf (clipper (r, ceil, soft), -ceil, ceil);
+                l = clipper (l, ceil, soft); r = clipper (r, ceil, soft);
             }
-            else { l = clampf (l, -ceil, ceil); r = clampf (r, -ceil, ceil); }
-            L[i] = l; R[i] = r;
+            L[i] = clampf (l, -ceil, ceil); R[i] = clampf (r, -ceil, ceil);
         }
         meter = clampf (-gainToDb (minG) / 12.0f, 0, 1);
     }
@@ -184,29 +186,45 @@ struct SwellFx final : Effect
 // =====================================================================================
 struct OverdriveFx final : Effect
 {
-    OnePole preLP[2], tightHP[2], toneLP[2]; DcBlock dc[2]; Biquad hump;
+    OnePole preLP[2], tightHP[2], toneLP[2]; DcBlock dc[2]; Biquad hump; Os2 os[2]; int lastVoice = -1;
     void prepare (double s, int b) override
     {
         Effect::prepare (s, b);
         for (int c = 0; c < 2; ++c) { preLP[c].setHz (8000.0f, sr); dc[c].setup (sr); }
-        hump.set (Biquad::Peak, 720.0f, 0.8f, 4.0f, sr);
+        lastVoice = -1;
         reset();
     }
-    void reset() override { for (int c = 0; c < 2; ++c) { preLP[c].reset(); tightHP[c].reset(); toneLP[c].reset(); dc[c].reset(); } hump.reset(); }
+    void reset() override { for (int c = 0; c < 2; ++c) { preLP[c].reset(); tightHP[c].reset(); toneLP[c].reset(); dc[c].reset(); os[c].reset(); } hump.reset(); }
     void process (float* L, float* R, int n, const float* v, const Context&) override
     {
-        const float drive = v[0] * 0.01f, tone = v[1] * 0.01f, clean = v[3] * 0.01f, asym = v[4] * 0.01f;
+        static const float humpF[4] = { 720.0f, 1000.0f, 500.0f, 1800.0f }, humpQ[4] = { 0.8f, 0.5f, 0.6f, 0.7f }, humpG[4] = { 4.0f, 1.5f, 2.5f, 5.0f };
+        static const float gBase[4] = { 6.0f, 2.0f, 4.0f, 10.0f }, gRange[4] = { 40.0f, 30.0f, 34.0f, 34.0f };
+        const int voice = std::max (0, std::min (3, (int) v[6]));
+        if (voice != lastVoice) { hump.set (Biquad::Peak, humpF[voice], humpQ[voice], humpG[voice], sr); lastVoice = voice; }
+        const float drive = v[0] * 0.01f, tone = v[1] * 0.01f, clean = v[3] * 0.01f + (voice == 1 ? 0.35f : 0.0f), asym = v[4] * 0.01f;
         const float outG = dbToGain (v[5]);
-        const float gain = dbToGain (6.0f + drive * 40.0f);
-        const float bias = asym * 0.4f, biasOff = fastTanh (bias);
-        for (int c = 0; c < 2; ++c) { tightHP[c].setHz (v[2], sr); toneLP[c].setHz (600.0f * std::pow (20.0f, tone), sr); }
+        const float gain = dbToGain (gBase[voice] + drive * gRange[voice]);
+        const float bias = asym * 0.4f + (voice == 3 ? 0.2f : 0.0f);
+        auto shape = [voice] (float u)
+        {
+            switch (voice)
+            {
+                case 1:  return 1.5f * u / (1.0f + std::fabs (u));                                    // transparent: wide soft knee
+                case 2:  return u > 0.0f ? fastTanh (u) : fastTanh (u * 0.7f) * 1.15f;                  // blues: gentle asymmetry
+                case 3:  return u > 0.0f ? fastTanh (u * 1.5f) * 0.8f : fastTanh (u * 0.5f) * 1.25f;    // germanium treble boost
+                default: return fastTanh (u);                                                         // screamer
+            }
+        };
+        const float off = shape (bias);
+        const float tightHz = voice == 3 ? std::max (v[2], 600.0f) : v[2];
+        for (int c = 0; c < 2; ++c) { tightHP[c].setHz (tightHz, sr); toneLP[c].setHz (600.0f * std::pow (20.0f, tone), sr); }
         float* ch[2] = { L, R };
         for (int c = 0; c < 2; ++c)
             for (int i = 0; i < n; ++i)
             {
                 const float x = ch[c][i];
                 const float s = tightHP[c].hp (preLP[c].lp (x)) * gain;
-                float y = fastTanh (s + bias) - biasOff;
+                float y = os[c].process (s, [&] (float u) { return shape (u + bias) - off; });
                 y = dc[c].tick (y);
                 y = hump.tick (y, c);
                 y = toneLP[c].lp (y);
@@ -218,60 +236,52 @@ struct OverdriveFx final : Effect
 // =====================================================================================
 struct DistortionFx final : Effect
 {
-    OnePole aaLP[2], inHP[2], toneLP[2], muffLP[2], muffHP[2]; DcBlock dc[2]; Biquad mids; EnvFollower env[2];
+    OnePole aaLP[2], inHP[2], toneLP[2], muffLP[2], muffHP[2]; DcBlock dc[2]; Biquad mids, hmLo, hmMid; EnvFollower env[2]; Os4 os[2];
     float lastMid = -999;
     void prepare (double s, int b) override
     {
         Effect::prepare (s, b);
         for (int c = 0; c < 2; ++c) { aaLP[c].setHz (9000.0f, sr); inHP[c].setHz (80.0f, sr); muffLP[c].setHz (700.0f, sr); muffHP[c].setHz (1300.0f, sr); dc[c].setup (sr); env[c].setup (1.0f, 60.0f, sr); }
+        hmLo.set (Biquad::Peak, 95.0f, 1.0f, 10.0f, sr); hmMid.set (Biquad::Peak, 1100.0f, 0.9f, 12.0f, sr);
         lastMid = -999; reset();
     }
-    void reset() override { for (int c = 0; c < 2; ++c) { aaLP[c].reset(); inHP[c].reset(); toneLP[c].reset(); muffLP[c].reset(); muffHP[c].reset(); dc[c].reset(); env[c].reset(); } mids.reset(); }
+    void reset() override { for (int c = 0; c < 2; ++c) { aaLP[c].reset(); inHP[c].reset(); toneLP[c].reset(); muffLP[c].reset(); muffHP[c].reset(); dc[c].reset(); env[c].reset(); os[c].reset(); } mids.reset(); hmLo.reset(); hmMid.reset(); }
     void process (float* L, float* R, int n, const float* v, const Context&) override
     {
         const float g = v[0] * 0.01f, tone = v[1] * 0.01f, bias = v[3] * 0.01f, outG = dbToGain (v[5]);
-        const int mode = (int) v[2];
+        const int mode = std::max (0, std::min (5, (int) v[2]));
         if (v[4] != lastMid) { mids.set (Biquad::Peak, 500.0f, 0.7f, v[4], sr); lastMid = v[4]; }
-        float gain;
-        switch (mode)
-        {
-            case 0:  gain = dbToGain (10.0f + g * 50.0f); break;
-            case 1:  gain = dbToGain (6.0f + g * 30.0f); break;
-            case 2:  gain = dbToGain (6.0f + g * 40.0f); break;
-            default: gain = dbToGain (6.0f + g * 36.0f); break;
-        }
-        const float toneHz = mode == 0 ? 400.0f * std::pow (40.0f, tone) : 1500.0f * std::pow (7.0f, tone);
+        static const float gB[6] = { 10, 6, 6, 6, 8, 12 }, gR[6] = { 50, 30, 40, 36, 44, 36 };
+        const float gain = dbToGain (gB[mode] + g * gR[mode]);
+        const float toneHz = mode == 0 ? 400.0f * std::pow (40.0f, tone) : (mode == 5 ? 2500.0f * std::pow (4.0f, tone) : 1500.0f * std::pow (7.0f, tone));
         for (int c = 0; c < 2; ++c) toneLP[c].setHz (toneHz, sr);
         const float b = -bias * 1.2f;
+        auto rat  = [] (float u) { return fastTanh (u) * 0.6f + clampf (u, -1.0f, 1.0f) * 0.4f; };
+        auto face = [] (float u) { return u > 0 ? fastTanh (u * 1.2f) : fastTanh (u * 0.6f) * 1.25f; };
+        auto hard = [] (float u) { return clampf (u, -1.0f, 1.0f) * 0.85f + fastTanh (u) * 0.15f; };
         float* ch[2] = { L, R };
         for (int c = 0; c < 2; ++c)
             for (int i = 0; i < n; ++i)
             {
-                float x = inHP[c].hp (aaLP[c].lp (ch[c][i]));
+                const float x = inHP[c].hp (aaLP[c].lp (ch[c][i]));
                 const float e = env[c].tick (x);
                 float y;
                 switch (mode)
                 {
-                    case 0: { const float u = x * gain + b; y = fastTanh (u) * 0.6f + clampf (u, -1, 1) * 0.4f - (fastTanh (b) * 0.6f + clampf (b, -1, 1) * 0.4f); y = toneLP[c].lp (y); break; }
+                    case 0:  y = toneLP[c].lp (os[c].process (x * gain, [&] (float u) { return rat (u + b) - rat (b); })); break;
                     case 1:
                     {
-                        float u = fastTanh (x * gain + b) - fastTanh (b);
-                        u = fastTanh (u * gain * 0.35f + 0.05f);
-                        y = lerp (muffLP[c].lp (u), muffHP[c].hp (u), tone) * 1.6f;
+                        const float u2 = os[c].process (x * gain, [&] (float u) { const float a = fastTanh (u + b) - fastTanh (b); return fastTanh (a * gain * 0.35f + 0.05f); });
+                        y = lerp (muffLP[c].lp (u2), muffHP[c].hp (u2), tone) * 1.6f;
                         break;
                     }
-                    case 2:
-                    {
-                        const float u = x * gain + b;
-                        const float s = u > 0 ? fastTanh (u * 1.2f) : fastTanh (u * 0.6f) * 1.25f;
-                        const float s0 = b > 0 ? fastTanh (b * 1.2f) : fastTanh (b * 0.6f) * 1.25f;
-                        y = toneLP[c].lp (s - s0);
-                        break;
-                    }
+                    case 2:  y = toneLP[c].lp (os[c].process (x * gain, [&] (float u) { return face (u + b) - face (b); })); break;
+                    case 3:  y = toneLP[c].lp (os[c].process (x, [&] (float u) { return fastTanh ((std::fabs (u) * 2.0f - e * 1.2f) * gain + b) - fastTanh (b); })); break;  // rectifier = octave up
+                    case 4:  y = toneLP[c].lp (os[c].process (x * gain, [&] (float u) { return hard (u + b) - hard (b); })) * 0.8f; break;
                     default:
                     {
-                        const float u = std::fabs (x) * 2.0f - e * 1.2f; // full-wave rectifier = octave up
-                        y = toneLP[c].lp (fastTanh (u * gain + b) - fastTanh (b));
+                        const float u2 = os[c].process (x * gain, [&] (float u) { const float a = face (u * 0.5f + b) - face (b); return hard (a * 6.0f); });
+                        y = toneLP[c].lp (hmMid.tick (hmLo.tick (u2, c), c)) * 0.3f;   // the "chainsaw" double mid/low peaks
                         break;
                     }
                 }
@@ -290,28 +300,37 @@ struct DistortionFx final : Effect
 // =====================================================================================
 struct AmpFx final : Effect
 {
+    struct Voice { float inHP, s1LP, c1HP, s2LP, c2Lo, c2Hi, bassF, midF, trebF, midOff, g1, r1, g2, k2, r2, g3, k3, r3, bias, out; };
     OnePole inHP[2], s1LP[2], c1HP[2], s2LP[2], c2HP[2];
     Biquad bass, mid, treb, pres, cab[6];
-    EnvFollower sag[2];
-    int nCab = 0;
-    float last[6] = { -1, -1, -1, -1, -1, -1 };
+    EnvFollower sag[2]; Os4 os[2];
+    int nCab = 0, lastVoice = -1;
+    float last[8] = { -1, -1, -1, -1, -1, -1, -1, -1 };
+    double osr = 192000.0;
+    static const Voice& voiceTable (int i)
+    {
+        //                 inHP  s1LP   c1HP s2LP   c2Lo c2Hi bass mid  treb  midOff g1    r1  g2    k2    r2  g3    k3    r3  bias   out
+        static const Voice t[5] = {
+            /* Brit Classic */ { 40, 12000, 30, 9000, 30, 120, 100, 650, 2800, 0.0f, 2.0f, 24, 1.5f, 0.3f, 30, 1.2f, 0.6f, 18, 0.15f, 1.0f },
+            /* US Clean     */ { 30, 14000, 20, 12000, 20, 60, 80, 450, 3500, -3.0f, 1.5f, 18, 1.0f, 0.5f, 14, 1.0f, 1.0f, 0, 0.08f, 1.5f },
+            /* Tweed        */ { 60, 9000, 50, 7000, 60, 120, 120, 800, 2200, 2.0f, 2.0f, 22, 1.5f, 0.3f, 24, 1.2f, 0.7f, 10, 0.3f, 1.0f },
+            /* Modern Gain  */ { 60, 11000, 120, 8000, 150, 300, 110, 750, 3200, -3.0f, 2.5f, 26, 2.0f, 0.2f, 34, 1.5f, 0.5f, 20, 0.12f, 0.8f },
+            /* Bass Amp     */ { 25, 8000, 15, 6000, 20, 25, 70, 500, 2000, 0.0f, 1.5f, 20, 1.2f, 0.4f, 20, 1.0f, 0.8f, 8, 0.1f, 1.3f } };
+        return t[std::max (0, std::min (4, i))];
+    }
     void prepare (double s, int b) override
     {
         Effect::prepare (s, b);
-        for (int c = 0; c < 2; ++c)
-        {
-            inHP[c].setHz (40.0f, sr); s1LP[c].setHz (12000.0f, sr); c1HP[c].setHz (30.0f, sr);
-            s2LP[c].setHz (9000.0f, sr); c2HP[c].setHz (110.0f, sr); sag[c].setup (10.0f, 150.0f, sr);
-        }
+        osr = sr * 4.0;
         for (auto& x : last) x = -1;
+        lastVoice = -1;
         reset();
     }
     void reset() override
     {
-        for (int c = 0; c < 2; ++c) { inHP[c].reset(); s1LP[c].reset(); c1HP[c].reset(); s2LP[c].reset(); c2HP[c].reset(); sag[c].reset(); }
+        for (int c = 0; c < 2; ++c) { inHP[c].reset(); s1LP[c].reset(); c1HP[c].reset(); s2LP[c].reset(); c2HP[c].reset(); sag[c].reset(); os[c].reset(); }
         bass.reset(); mid.reset(); treb.reset(); pres.reset(); for (auto& q : cab) q.reset();
     }
-    static inline float tube (float x) { return fastTanh (x + 0.15f) - 0.148885f; }
     void setCab (int type)
     {
         struct F { Biquad::Type t; float f, q, g; };
@@ -326,32 +345,50 @@ struct AmpFx final : Effect
     }
     void process (float* L, float* R, int n, const float* v, const Context&) override
     {
-        if (v[1] != last[1]) bass.set (Biquad::LowShelf, 100.0f, 0.7f, (v[1] - 5.0f) * 2.4f, sr);
-        if (v[2] != last[2]) mid.set (Biquad::Peak, 650.0f, 0.8f, (v[2] - 5.0f) * 2.4f, sr);
-        if (v[3] != last[3]) treb.set (Biquad::HighShelf, 2800.0f, 0.7f, (v[3] - 5.0f) * 2.4f, sr);
+        const int vi = std::max (0, std::min (4, (int) v[7]));
+        const Voice& V = voiceTable (vi);
+        const bool vch = vi != lastVoice;
+        if (vch)
+        {
+            for (int c = 0; c < 2; ++c)
+            {
+                inHP[c].setHz (V.inHP, sr); s1LP[c].setHz (V.s1LP, osr); c1HP[c].setHz (V.c1HP, osr); s2LP[c].setHz (V.s2LP, osr);
+                sag[c].setup (10.0f, 150.0f, osr);
+            }
+            lastVoice = vi;
+        }
+        // the tone stack runs inside the oversampled section, so it is designed for the 4x rate
+        if (vch || v[1] != last[1]) bass.set (Biquad::LowShelf, V.bassF, 0.7f, (v[1] - 5.0f) * 2.4f, osr);
+        if (vch || v[2] != last[2]) mid.set (Biquad::Peak, V.midF, 0.8f, (v[2] - 5.0f) * 2.4f + V.midOff, osr);
+        if (vch || v[3] != last[3]) treb.set (Biquad::HighShelf, V.trebF, 0.7f, (v[3] - 5.0f) * 2.4f, osr);
         if (v[4] != last[4]) pres.set (Biquad::HighShelf, 3800.0f, 0.7f, (v[4] - 5.0f) * 1.8f, sr);
         if (v[5] != last[5]) setCab ((int) v[5]);
-        for (int k = 0; k < 6; ++k) last[k] = v[k];
+        for (int k = 0; k < 8; ++k) last[k] = v[k];
         const float g = v[0] * 0.01f;
-        const float pre1 = dbToGain (g * 24.0f) * 2.0f;
-        const float pre2 = dbToGain (clampf ((g - 0.3f) / 0.7f, 0, 1) * 30.0f) * 1.5f;
-        const float pre3 = dbToGain (clampf ((g - 0.6f) / 0.4f, 0, 1) * 18.0f) * 1.2f;
-        const float outG = 0.3f / (1.0f + g * 0.6f);
-        c2HP[0].setHz (30.0f + g * 90.0f, sr); c2HP[1].a = c2HP[0].a;
+        const float pre1 = dbToGain (g * V.r1) * V.g1;
+        const float pre2 = dbToGain (clampf ((g - V.k2) / (1.0f - V.k2 + 1.0e-3f), 0, 1) * V.r2) * V.g2;
+        const float pre3 = dbToGain (clampf ((g - V.k3) / (1.0f - V.k3 + 1.0e-3f), 0, 1) * V.r3) * V.g3;
+        const float master = dbToGain ((v[6] - 5.0f) * 2.4f);
+        const float pd = 1.3f * master;
+        const float outG = 0.3f / (1.0f + g * 0.6f) * V.out / std::sqrt (std::max (master, 0.25f));
+        const float bias = V.bias, bOff = fastTanh (bias);
+        c2HP[0].setHz (lerp (V.c2Lo, V.c2Hi, g), osr); c2HP[1].a = c2HP[0].a;
         float* ch[2] = { L, R };
         for (int c = 0; c < 2; ++c)
             for (int i = 0; i < n; ++i)
             {
-                float x = inHP[c].hp (ch[c][i]);
-                float a = tube (x * pre1);
-                a = c1HP[c].hp (s1LP[c].lp (a));
-                float b = tube (a * pre2);
-                b = c2HP[c].hp (s2LP[c].lp (b));
-                float s = tube (b * pre3);
-                s = treb.tick (mid.tick (bass.tick (s, c), c), c);
-                const float e = sag[c].tick (s);
-                const float pg = 1.0f / (1.0f + e * 0.5f * g);
-                float p = fastTanh (s * 1.3f * pg);
+                const float x = inHP[c].hp (ch[c][i]);
+                float p = os[c].process (x, [&] (float u)
+                {
+                    float a = fastTanh (u * pre1 + bias) - bOff;
+                    a = c1HP[c].hp (s1LP[c].lp (a));
+                    float b = fastTanh (a * pre2 + bias) - bOff;
+                    b = c2HP[c].hp (s2LP[c].lp (b));
+                    float s = fastTanh (b * pre3 + bias) - bOff;
+                    s = treb.tick (mid.tick (bass.tick (s, c), c), c);
+                    const float e = sag[c].tick (s);
+                    return fastTanh (s * pd / (1.0f + e * 0.5f * g * master));     // power amp with supply sag
+                });
                 p = pres.tick (p, c);
                 for (int k = 0; k < nCab; ++k) p = cab[k].tick (p, c);
                 ch[c][i] = p * outG;
@@ -362,31 +399,34 @@ struct AmpFx final : Effect
 // =====================================================================================
 struct TapeFx final : Effect
 {
-    DelayLine dl[2]; Biquad preE, deE, bump, hf; Rng rng { 1234u };
+    DelayLine dl[2]; Biquad preE, deE, bump, hf; Rng rng { 1234u }; Os2 os[2];
     float wowPh = 0, flPh = 0, drift = 0, driftTgt = 0; int driftCtr = 0;
     Smooth base; float dropG = 1; int dropLeft = 0; float dropDepth = 0;
-    float lastTone = -1, lastAge = -1;
+    float lastTone = -1, lastAge = -1; int lastSpeed = -1;
     void prepare (double s, int b) override
     {
         Effect::prepare (s, b);
         for (auto& d : dl) d.init (int (0.03 * sr));
         preE.set (Biquad::HighShelf, 3000.0f, 0.7f, 6.0f, sr);
         deE.set (Biquad::HighShelf, 3000.0f, 0.7f, -6.0f, sr);
-        bump.set (Biquad::Peak, 90.0f, 1.0f, 2.5f, sr);
         base.setTime (200.0f, sr); base.reset (float (0.001 * sr) + 2.0f);
-        lastTone = lastAge = -1;
+        lastTone = lastAge = -1; lastSpeed = -1;
         reset();
     }
-    void reset() override { for (auto& d : dl) d.clear(); preE.reset(); deE.reset(); bump.reset(); hf.reset(); dropG = 1; dropLeft = 0; }
+    void reset() override { for (auto& d : dl) d.clear(); preE.reset(); deE.reset(); bump.reset(); hf.reset(); os[0].reset(); os[1].reset(); dropG = 1; dropLeft = 0; }
     void process (float* L, float* R, int n, const float* v, const Context&) override
     {
+        static const float bumpF[3] = { 45.0f, 90.0f, 140.0f }, bumpG[3] = { 3.5f, 2.5f, 2.0f }, hfMul[3] = { 0.6f, 1.0f, 1.2f }, hissMul[3] = { 1.6f, 1.0f, 0.6f };
+        const int speed = std::max (0, std::min (2, (int) v[6]));
         const float g = dbToGain (v[0]), comp = std::pow (g, -0.6f);
-        const float wow = v[1] * 0.01f, flut = v[2] * 0.01f, hiss = v[3] * 0.01f, tone = v[4] * 0.01f, age = v[5] * 0.01f;
-        if (tone != lastTone || age != lastAge)
+        const float wow = v[1] * 0.01f, flut = v[2] * 0.01f, hiss = v[3] * 0.01f * hissMul[speed], tone = v[4] * 0.01f, age = v[5] * 0.01f;
+        if (speed != lastSpeed) bump.set (Biquad::Peak, bumpF[speed], 1.0f, bumpG[speed], sr);
+        if (tone != lastTone || age != lastAge || speed != lastSpeed)
         {
-            hf.set (Biquad::LP, 20000.0f * std::pow (0.3f, 1.0f - tone) * (1.0f - age * 0.5f), 0.7f, 0.0f, sr);
+            hf.set (Biquad::LP, std::min (20000.0f, 20000.0f * std::pow (0.3f, 1.0f - tone) * (1.0f - age * 0.5f) * hfMul[speed]), 0.7f, 0.0f, sr);
             lastTone = tone; lastAge = age;
         }
+        lastSpeed = speed;
         const float fs = float (sr);
         const float wowD = wow * (0.0025f + age * 0.003f) * fs;
         const float flD = flut * 0.00012f * fs;
@@ -394,6 +434,8 @@ struct TapeFx final : Effect
         const float wowInc = (0.55f + age * 0.3f) / fs, flInc = 7.3f / fs;
         const float dropKg = 1.0f - onePoleCoef (5.0f, sr);
         const float dropProb = age * 1.5f / fs;
+        const float gd = g * 0.8f, gc = comp * 1.25f;
+        auto sat = [gd, gc] (float u) { return fastTanh (u * gd) * gc; };
         for (int i = 0; i < n; ++i)
         {
             if (--driftCtr <= 0) { driftCtr = int (0.25f * fs); driftTgt = rng.bi(); }
@@ -409,7 +451,7 @@ struct TapeFx final : Effect
             for (int c = 0; c < 2; ++c)
             {
                 float x = preE.tick (ch[c][i], c);
-                x = fastTanh (x * g * 0.8f) * comp * 1.25f;
+                x = os[c].process (x, sat);
                 x = hf.tick (bump.tick (deE.tick (x, c), c), c);
                 dl[c].push (x);
                 float y = dl[c].read (d) * dropG;
@@ -423,22 +465,23 @@ struct TapeFx final : Effect
 // =====================================================================================
 struct EqFx final : Effect
 {
-    Biquad lc, lo, mi, hi, hc; float last[6] = { -1, -1, -1, -1, -1, -1 };
+    Biquad lc, lo, mi, hi, hc; float last[8] = { -1, -1, -1, -1, -1, -1, -1, -1 };
     bool useLc = false, useLo = false, useMi = false, useHi = false, useHc = false;
     void prepare (double s, int b) override { Effect::prepare (s, b); for (auto& x : last) x = -1; reset(); }
     void reset() override { lc.reset(); lo.reset(); mi.reset(); hi.reset(); hc.reset(); }
     void process (float* L, float* R, int n, const float* v, const Context&) override
     {
         bool changed = false;
-        for (int k = 0; k < 6; ++k) if (v[k] != last[k]) { changed = true; last[k] = v[k]; }
+        for (int k = 0; k < 7; ++k) if (v[k] != last[k]) { changed = true; last[k] = v[k]; }
         if (changed)
         {
             useLc = v[0] > 20.5f;  if (useLc) lc.set (Biquad::HP, v[0], 0.707f, 0, sr);
             useLo = std::fabs (v[1]) > 0.05f; if (useLo) lo.set (Biquad::LowShelf, 100.0f, 0.7f, v[1], sr);
-            useMi = std::fabs (v[3]) > 0.05f; if (useMi) mi.set (Biquad::Peak, v[2], 0.9f, v[3], sr);
+            useMi = std::fabs (v[3]) > 0.05f; if (useMi) mi.set (Biquad::Peak, v[2], v[6], v[3], sr);
             useHi = std::fabs (v[4]) > 0.05f; if (useHi) hi.set (Biquad::HighShelf, 8000.0f, 0.7f, v[4], sr);
             useHc = v[5] < 19600.0f; if (useHc) hc.set (Biquad::LP, v[5], 0.707f, 0, sr);
         }
+        const float og = dbToGain (v[7]);
         float* ch[2] = { L, R };
         for (int c = 0; c < 2; ++c)
             for (int i = 0; i < n; ++i)
@@ -449,7 +492,7 @@ struct EqFx final : Effect
                 if (useMi) x = mi.tick (x, c);
                 if (useHi) x = hi.tick (x, c);
                 if (useHc) x = hc.tick (x, c);
-                ch[c][i] = x;
+                ch[c][i] = x * og;
             }
     }
 };
@@ -498,9 +541,9 @@ struct AutoWahFx final : Effect
 // =====================================================================================
 struct LadderFx final : Effect
 {
-    float s[2][4] = {}; float ph = 0; Smooth cut;
+    float s[2][4] = {}; float ph = 0; Smooth cut; Os2 os[2];
     void prepare (double sm, int b) override { Effect::prepare (sm, b); cut.setTime (8.0f, sr); cut.reset (2000.0f); reset(); }
-    void reset() override { for (auto& c : s) for (auto& x : c) x = 0; }
+    void reset() override { for (auto& c : s) for (auto& x : c) x = 0; os[0].reset(); os[1].reset(); }
     void process (float* L, float* R, int n, const float* v, const Context&) override
     {
         cut.tgt = v[0];
@@ -508,7 +551,7 @@ struct LadderFx final : Effect
         const int mode = (int) v[3];
         const float inc = v[4] / float (sr), depth = v[5];
         const float comp = (mode <= 1 ? 1.0f + k * 0.35f : 1.0f) / std::sqrt (drive);
-        const float nyq = float (sr) * 0.45f;
+        const float nyq = float (sr) * 0.45f, osr = float (sr) * 2.0f;
         float* ch[2] = { L, R };
         for (int i = 0; i < n; ++i)
         {
@@ -518,23 +561,24 @@ struct LadderFx final : Effect
             {
                 const float lfo = depth > 0 ? fastSin2Pi (ph + 0.25f * float (c)) : 0.0f;
                 const float fc = clampf (c0 * std::exp2 (depth * lfo), 20.0f, nyq);
-                const float g = fastTan (kPi * fc / float (sr));
+                const float g = fastTan (kPi * fc / osr);              // the filter core runs at 2x: cleaner resonance and drive
                 const float G = g / (1.0f + g), inv = 1.0f / (1.0f + g);
-                float* st = s[c];
-                const float S = (G * G * G * st[0] + G * G * st[1] + G * st[2] + st[3]) * inv;
                 const float G4 = G * G * G * G;
-                float u = (ch[c][i] * drive - k * S) / (1.0f + k * G4);
-                u = fastTanh (u);
-                float y[4]; float in = u;
-                for (int p = 0; p < 4; ++p) { const float vv = (in - st[p]) * G; y[p] = vv + st[p]; st[p] = y[p] + vv; in = y[p]; }
-                float out;
-                switch (mode)
+                float* st = s[c];
+                const float out = os[c].process (ch[c][i] * drive, [&] (float in0)
                 {
-                    case 0:  out = y[3]; break;
-                    case 1:  out = y[1]; break;
-                    case 2:  out = (y[0] - y[1]) * 3.0f; break;
-                    default: out = u - 4 * y[0] + 6 * y[1] - 4 * y[2] + y[3]; break;
-                }
+                    const float S = (G * G * G * st[0] + G * G * st[1] + G * st[2] + st[3]) * inv;
+                    const float u = fastTanh ((in0 - k * S) / (1.0f + k * G4));
+                    float y[4]; float in = u;
+                    for (int p = 0; p < 4; ++p) { const float vv = (in - st[p]) * G; y[p] = vv + st[p]; st[p] = y[p] + vv; in = y[p]; }
+                    switch (mode)
+                    {
+                        case 0:  return y[3];
+                        case 1:  return y[1];
+                        case 2:  return (y[0] - y[1]) * 3.0f;
+                        default: return u - 4 * y[0] + 6 * y[1] - 4 * y[2] + y[3];
+                    }
+                });
                 ch[c][i] = out * comp;
             }
         }
@@ -906,16 +950,17 @@ struct PitchFx final : Effect
 // =====================================================================================
 struct DelayFx final : Effect
 {
-    DelayLine dl[2]; Smooth time; OnePole tone[2], hp[2]; float ph = 0, fph = 0, rph = 0;
+    DelayLine dl[2]; Smooth time; OnePole tone[2], hp[2]; float ph = 0, fph = 0, rph = 0; EnvFollower duckEnv; float duckG = 1;
     void prepare (double s, int b) override
     {
         Effect::prepare (s, b);
-        for (auto& d : dl) d.init (int (2.1 * sr) + 256);
+        for (auto& d : dl) d.init (int (3.1 * sr) + 256);
         time.setTime (120.0f, sr); time.reset (0.375f * float (sr));
         hp[0].setHz (90.0f, sr); hp[1].setHz (90.0f, sr);
+        duckEnv.setup (2.0f, 180.0f, sr);
         reset();
     }
-    void reset() override { for (auto& d : dl) d.clear(); tone[0].reset(); tone[1].reset(); hp[0].reset(); hp[1].reset(); rph = 0; }
+    void reset() override { for (auto& d : dl) d.clear(); tone[0].reset(); tone[1].reset(); hp[0].reset(); hp[1].reset(); rph = 0; duckEnv.reset(); duckG = 1; }
     inline float loopFx (float y, int c, int mode)
     {
         y = tone[c].lp (y);
@@ -933,7 +978,7 @@ struct DelayFx final : Effect
         if (sync > 0) ms = kSyncBeats[sync - 1] * 60000.0f / float (ctx.bpm);
         ms = clampf (ms, 1.0f, 2000.0f);
         time.tgt = ms * 0.001f * float (sr);
-        const float fb = v[2] * 0.01f, mod = v[5] * 0.01f;
+        const float fb = v[2] * 0.01f, mod = v[5] * 0.01f, duck = v[6] * 0.01f, spread = 1.0f + 0.5f * v[7] * 0.01f;
         const float toneHz = mode == 1 ? v[3] * 0.6f : v[3];
         tone[0].setHz (toneHz, sr); tone[1].setHz (toneHz, sr);
         const float modMs = mode == 2 ? 2.5f : (mode == 1 ? 1.2f : 0.6f);
@@ -941,23 +986,30 @@ struct DelayFx final : Effect
         const float flS = mode == 2 ? mod * 0.00008f * float (sr) : 0.0f;
         const float pinc = 0.5f / float (sr), finc = 6.5f / float (sr);
         const float maxD = float (dl[0].size() - 8);
+        const float kDuck = 1.0f - onePoleCoef (15.0f, sr);
         for (int i = 0; i < n; ++i)
         {
             ph += pinc; if (ph >= 1) ph -= 1;
             fph += finc; if (fph >= 1) fph -= 1;
             const float T = time.next();
             const float d = clampf (T + modS * (fastSin2Pi (ph) + 1.0f) + flS * fastSin2Pi (fph), 2.0f, maxD);
+            if (duck > 0.0f)
+            {
+                const float e = duckEnv.tick (maxAbs (L[i], R[i]));
+                const float tg = 1.0f - duck * clampf ((gainToDb (e) + 45.0f) / 30.0f, 0.0f, 1.0f);   // echoes step back while you play
+                duckG += (tg - duckG) * kDuck;
+            }
+            else duckG = 1.0f;
             if (mode == 3)
             {
                 const float in = (L[i] + R[i]) * 0.5f;
                 const float yl = dl[0].read (d), yr = dl[1].read (d);
                 dl[0].push (in + fb * loopFx (yr, 0, 0));
                 dl[1].push (fb * loopFx (yl, 1, 0));
-                L[i] = yl; R[i] = yr;
+                L[i] = yl * duckG; R[i] = yr * duckG;
             }
             else if (mode == 4)
             {
-                // reverse: two crossfaded taps sweeping backwards through the last T samples
                 const float W = std::max (T, 64.0f);
                 rph += 2.0f / W; rph -= std::floor (rph);
                 float p2 = rph + 0.5f; if (p2 >= 1) p2 -= 1;
@@ -967,7 +1019,7 @@ struct DelayFx final : Effect
                 {
                     const float y = dl[c].read (2.0f + rph * W) * w1 * w1 + dl[c].read (2.0f + p2 * W) * w2 * w2;
                     dl[c].push (ch[c][i] + fb * loopFx (y, c, 0));
-                    ch[c][i] = y;
+                    ch[c][i] = y * duckG;
                 }
             }
             else
@@ -975,12 +1027,13 @@ struct DelayFx final : Effect
                 float* ch[2] = { L, R };
                 for (int c = 0; c < 2; ++c)
                 {
-                    const float y = dl[c].read (d);
+                    const float y = dl[c].read (c == 1 ? std::min (d * spread, maxD) : d);
                     dl[c].push (ch[c][i] + fb * loopFx (y, c, mode));
-                    ch[c][i] = y;
+                    ch[c][i] = y * duckG;
                 }
             }
         }
+        meter = 1.0f - duckG;
     }
 };
 
@@ -996,7 +1049,7 @@ struct ReverbFx final : Effect
 {
     static constexpr int N = 8;
     DelayLine line[N], pre[2]; SchroederAP diff[2][4]; OnePole damp[N]; Smooth len[N];
-    GrainShifter shim; float lph[N] = {}; float shimSig = 0;
+    GrainShifter shim; float lph[N] = {}; float shimSig = 0; OnePole lcut[2];
     float gains[N] = {}; float lastSize = -1, lastDecay = -1, lastDamp = -1;
     void prepare (double s, int b) override
     {
@@ -1015,7 +1068,7 @@ struct ReverbFx final : Effect
         for (auto& p : pre) p.clear();
         for (auto& c : diff) for (auto& d : c) d.dl.clear();
         for (auto& d : damp) d.reset();
-        shim.clear(); shimSig = 0;
+        shim.clear(); shimSig = 0; lcut[0].reset(); lcut[1].reset();
     }
     void process (float* L, float* R, int n, const float* v, const Context&) override
     {
@@ -1036,6 +1089,8 @@ struct ReverbFx final : Effect
         const float preS = std::max (1.0f, v[3] * 0.001f * float (sr));
         const float modS = mod * 10.0f * float (sr / 48000.0);
         const float win = 0.08f * float (sr);
+        const bool useLc = v[6] > 20.5f; const float width = v[7] * 0.01f;
+        if (useLc) { lcut[0].setHz (v[6], sr); lcut[1].a = lcut[0].a; }
         for (int i = 0; i < n; ++i)
         {
             pre[0].push (L[i]); pre[1].push (R[i]);
@@ -1056,11 +1111,13 @@ struct ReverbFx final : Effect
                 const float x = in + gains[j] * (o[j] - sum);
                 line[j].push (std::fabs (x) > 1.5f ? fastTanh (x * 0.5f) * 2.0f : x);
             }
-            const float outL = (o[0] - o[1] + o[2] - o[3] + o[4] - o[5] + o[6] - o[7]) * 0.4f;
-            const float outR = (o[0] + o[1] - o[2] - o[3] + o[4] + o[5] - o[6] - o[7]) * 0.4f;
+            float outL = (o[0] - o[1] + o[2] - o[3] + o[4] - o[5] + o[6] - o[7]) * 0.4f;
+            float outR = (o[0] + o[1] - o[2] - o[3] + o[4] + o[5] - o[6] - o[7]) * 0.4f;
             if (shimmer > 0) shimSig = shim.tick ((outL + outR) * 0.5f, 2.0f, win) * shimmer * 0.35f;
             else shimSig = 0;
-            L[i] = outL; R[i] = outR;
+            if (useLc) { outL = lcut[0].hp (outL); outR = lcut[1].hp (outR); }
+            const float mm = 0.5f * (outL + outR), ss = 0.5f * (outL - outR) * width;
+            L[i] = mm + ss; R[i] = mm - ss;
         }
     }
 };
@@ -1752,7 +1809,7 @@ struct GhostVerbFx final : Effect
             wetG += (tgt - wetG) * (tgt > wetG ? kUp : kDown);
             gains[(size_t) i] = wetG; m = wetG;
         }
-        const float rv[6] = { v[0], v[1], 45.0f, 15.0f, 50.0f, v[5] };
+        const float rv[8] = { v[0], v[1], 45.0f, 15.0f, 50.0f, v[5], 20.0f, 100.0f };
         verb.process (L, R, n, rv, ctx);
         for (int i = 0; i < n; ++i) { L[i] *= gains[(size_t) i] * 2.2f; R[i] *= gains[(size_t) i] * 2.2f; }
         meter = m;
@@ -2170,6 +2227,618 @@ struct ChaosFx final : Effect
     }
 };
 
+// =====================================================================================
+// v2.0: compressor collection
+// =====================================================================================
+inline float softKneeGr (float over, float slope, float knee)     // gain change in dB for a level 'over' dB above threshold
+{
+    if (2.0f * over < -knee) return 0.0f;
+    if (2.0f * std::fabs (over) <= knee) return slope * sqr (over + knee * 0.5f) / (2.0f * knee);
+    return slope * over;
+}
+
+struct Comp76Fx final : Effect      // FET-style: fast, aggressive, coloured
+{
+    float gr = 0; Os2 os[2];
+    void reset() override { gr = 0; os[0].reset(); os[1].reset(); }
+    void process (float* L, float* R, int n, const float* v, const Context&) override
+    {
+        static const float ratios[5] = { 4, 8, 12, 20, 30 }, thrs[5] = { -18, -16, -14, -12, -22 };
+        const int ri = std::max (0, std::min (4, (int) v[4]));
+        const bool allIn = ri == 4;
+        const float inG = dbToGain (v[0]), outG = dbToGain (v[1]);
+        const float aA = onePoleCoef (v[2], sr);
+        const float aR = onePoleCoef (allIn ? v[3] * 0.5f : v[3], sr), aRslow = onePoleCoef (v[3] * 3.0f, sr);
+        const float slope = 1.0f / ratios[ri] - 1.0f, thr = thrs[ri], knee = allIn ? 8.0f : 3.0f;
+        const float color = allIn ? 0.5f : 0.2f;
+        for (int i = 0; i < n; ++i)
+        {
+            float l = L[i] * inG, r = R[i] * inG;
+            const float tgt = softKneeGr (gainToDb (maxAbs (l, r)) - thr, slope, knee);
+            if (tgt < gr) gr = tgt + aA * (gr - tgt);
+            else gr = tgt + (gr < -10.0f ? aR : lerp (aRslow, aR, -gr * 0.1f)) * (gr - tgt);   // release speeds up when hit harder
+            const float g = dbToGain (gr);
+            const float c = color * std::min (1.0f, -gr / 12.0f);
+            auto fet = [c] (float u) { return u + c * (fastTanh (u * 1.5f + 0.25f) - 0.2449f - u) * 0.5f; };   // even-order FET colour grows with reduction
+            l = os[0].process (l * g, fet); r = os[1].process (r * g, fet);
+            L[i] = l * outG; R[i] = r * outG;
+        }
+        meter = clampf (-gr / 20.0f, 0, 1);
+    }
+};
+
+struct OptoFx final : Effect        // optical leveller: slow, smooth, program dependent
+{
+    float fast = 0, slow = 0; OnePole emph;
+    void reset() override { fast = slow = 0; emph.reset(); }
+    void prepare (double s, int b) override { Effect::prepare (s, b); emph.setHz (1500.0f, sr); reset(); }
+    void process (float* L, float* R, int n, const float* v, const Context&) override
+    {
+        const float scG = dbToGain (v[0] * 0.42f - 6.0f), mk = dbToGain (v[1]);
+        const bool limit = (int) v[2] == 1;
+        const float em = v[3] * 0.01f * 2.5f;
+        const float slope = (limit ? 1.0f / 10.0f : 1.0f / 3.0f) - 1.0f;
+        const float aA = onePoleCoef (10.0f, sr), aRf = onePoleCoef (60.0f, sr), aSa = onePoleCoef (400.0f, sr), aSr = onePoleCoef (2500.0f, sr);
+        float gr = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            float sc = (L[i] + R[i]) * 0.5f;
+            if (em > 0.0f) sc += em * emph.hp (sc);
+            const float x = std::fabs (sc) * scG;
+            fast = x > fast ? x + aA * (fast - x) : x + aRf * (fast - x);          // the cell reacts in ~10 ms, half-recovers in ~60 ms
+            slow = fast > slow ? fast + aSa * (slow - fast) : fast + aSr * (slow - fast);   // ...then remembers for seconds
+            const float cell = std::max (fast, slow * 0.85f);
+            gr = softKneeGr (gainToDb (cell) + 16.0f, slope, 10.0f);
+            const float g = dbToGain (gr) * mk;
+            L[i] *= g; R[i] *= g;
+        }
+        meter = clampf (-gr / 20.0f, 0, 1);
+    }
+};
+
+struct BusCompFx final : Effect     // VCA bus compressor: glue
+{
+    float gr = 0, grSlow = 0, rms = 0; OnePole scHP[2];
+    void reset() override { gr = grSlow = rms = 0; scHP[0].reset(); scHP[1].reset(); }
+    void process (float* L, float* R, int n, const float* v, const Context&) override
+    {
+        static const float ratios[3] = { 2, 4, 10 }, atk[6] = { 0.1f, 0.3f, 1, 3, 10, 30 }, rel[5] = { 100, 300, 600, 1200, 150 };
+        const int ri = std::max (0, std::min (2, (int) v[1])), ai = std::max (0, std::min (5, (int) v[2])), rl = std::max (0, std::min (4, (int) v[3]));
+        const bool autoRel = rl == 4;
+        const float slope = 1.0f / ratios[ri] - 1.0f, knee = ri == 0 ? 8.0f : (ri == 1 ? 4.0f : 1.5f);
+        const float aA = onePoleCoef (atk[ai], sr), aR = onePoleCoef (rel[rl], sr), aRs = onePoleCoef (1500.0f, sr), aAs = onePoleCoef (atk[ai] * 20.0f + 20.0f, sr);
+        const float mk = dbToGain (v[4]), rmsC = onePoleCoef (5.0f, sr);
+        const bool useHP = v[5] > 20.5f;
+        if (useHP) { scHP[0].setHz (v[5], sr); scHP[1].a = scHP[0].a; }
+        for (int i = 0; i < n; ++i)
+        {
+            const float lv = useHP ? maxAbs (scHP[0].hp (L[i]), scHP[1].hp (R[i])) : maxAbs (L[i], R[i]);
+            rms = lv * lv + rmsC * (rms - lv * lv);
+            const float tgt = softKneeGr (gainToDb (std::sqrt (rms) * 1.414f) - v[0], slope, knee);
+            gr = tgt < gr ? tgt + aA * (gr - tgt) : tgt + aR * (gr - tgt);
+            float use = gr;
+            if (autoRel) { grSlow = gr < grSlow ? gr + aAs * (grSlow - gr) : gr + aRs * (grSlow - gr); use = std::min (gr, grSlow * 0.7f + gr * 0.3f); }
+            const float g = dbToGain (use) * mk;
+            L[i] *= g; R[i] *= g;
+        }
+        meter = clampf (-gr / 20.0f, 0, 1);
+    }
+};
+
+struct PedalCompFx final : Effect   // stompbox squeeze and sustain
+{
+    float gr = 0; Biquad tone; float lastTone = -999;
+    void prepare (double s, int b) override { Effect::prepare (s, b); lastTone = -999; reset(); }
+    void reset() override { gr = 0; tone.reset(); }
+    void process (float* L, float* R, int n, const float* v, const Context&) override
+    {
+        const float sus = v[0] * 0.01f, lvl = dbToGain (v[1]), blend = v[4] * 0.01f;
+        const float thr = -20.0f - sus * 35.0f, slope = 1.0f / 12.0f - 1.0f;
+        const float aA = onePoleCoef (lerp (12.0f, 0.5f, v[2] * 0.01f), sr), aR = onePoleCoef (450.0f, sr);
+        const float mk = dbToGain (-thr * 0.62f - 6.0f);
+        if (v[3] != lastTone) { tone.set (Biquad::HighShelf, 2000.0f, 0.7f, v[3] * 0.08f, sr); lastTone = v[3]; }
+        for (int i = 0; i < n; ++i)
+        {
+            const float tgt = softKneeGr (gainToDb (maxAbs (L[i], R[i])) - thr, slope, 6.0f);
+            gr = tgt < gr ? tgt + aA * (gr - tgt) : tgt + aR * (gr - tgt);
+            const float g = dbToGain (gr) * mk;
+            const float l = fastTanh (tone.tick (L[i] * g, 0) * 0.7f) * 1.4286f, r = fastTanh (tone.tick (R[i] * g, 1) * 0.7f) * 1.4286f;
+            L[i] = lerp (l, L[i], blend) * lvl; R[i] = lerp (r, R[i], blend) * lvl;
+        }
+        meter = clampf (-gr / 30.0f, 0, 1);
+    }
+};
+
+struct VariMuFx final : Effect      // tube variable-mu: the harder you hit it, the higher the ratio
+{
+    float gr = 0, grSlow = 0; DcBlock dc[2];
+    void prepare (double s, int b) override { Effect::prepare (s, b); dc[0].setup (sr); dc[1].setup (sr); reset(); }
+    void reset() override { gr = grSlow = 0; dc[0].reset(); dc[1].reset(); }
+    void process (float* L, float* R, int n, const float* v, const Context&) override
+    {
+        static const float rec[5] = { 200, 400, 800, 2000, 300 };
+        const int ri = std::max (0, std::min (4, (int) v[2]));
+        const float inG = dbToGain (v[0]), outG = dbToGain (v[3]), warm = v[4] * 0.01f;
+        const float aA = onePoleCoef (20.0f, sr), aR = onePoleCoef (rec[ri], sr), aAs = onePoleCoef (600.0f, sr), aRs = onePoleCoef (5000.0f, sr);
+        for (int i = 0; i < n; ++i)
+        {
+            float l = L[i] * inG, r = R[i] * inG;
+            const float over = gainToDb (maxAbs (l, r)) - v[1] + 4.0f;
+            const float o = std::max (0.0f, over);
+            const float tgt = -o * (1.0f - 1.0f / (1.4f + o * 0.22f)) * std::min (1.0f, o * 0.25f);
+            gr = tgt < gr ? tgt + aA * (gr - tgt) : tgt + aR * (gr - tgt);
+            float use = gr;
+            if (ri == 4) { grSlow = gr < grSlow ? gr + aAs * (grSlow - gr) : gr + aRs * (grSlow - gr); use = std::min (gr, grSlow); }
+            const float g = dbToGain (use);
+            l *= g; r *= g;
+            if (warm > 0.0f)
+            {
+                l = dc[0].tick (lerp (l, fastTanh (l * 0.9f + 0.18f) * 1.15f - 0.2049f, warm));
+                r = dc[1].tick (lerp (r, fastTanh (r * 0.9f + 0.18f) * 1.15f - 0.2049f, warm));
+            }
+            L[i] = l * outG; R[i] = r * outG;
+        }
+        meter = clampf (-gr / 20.0f, 0, 1);
+    }
+};
+
+struct MultibandFx final : Effect   // 3 bands, Linkwitz-Riley crossovers (flat when idle, no latency)
+{
+    Biquad lp1[2], hp1[2], lp2[2], hp2[2], apL[2], apH[2];
+    float gr[3] = { 0, 0, 0 }, lastX[2] = { -1, -1 };
+    void prepare (double s, int b) override { Effect::prepare (s, b); lastX[0] = lastX[1] = -1; reset(); }
+    void reset() override { for (int k = 0; k < 2; ++k) { lp1[k].reset(); hp1[k].reset(); lp2[k].reset(); hp2[k].reset(); apL[k].reset(); apH[k].reset(); } gr[0] = gr[1] = gr[2] = 0; }
+    void process (float* L, float* R, int n, const float* v, const Context&) override
+    {
+        const float f2 = std::max (v[1], v[0] * 2.0f);
+        if (v[0] != lastX[0] || f2 != lastX[1])
+        {
+            for (int k = 0; k < 2; ++k)
+            {
+                lp1[k].set (Biquad::LP, v[0], 0.7071f, 0, sr); hp1[k].set (Biquad::HP, v[0], 0.7071f, 0, sr);
+                lp2[k].set (Biquad::LP, f2, 0.7071f, 0, sr);   hp2[k].set (Biquad::HP, f2, 0.7071f, 0, sr);
+                apL[k].set (Biquad::LP, f2, 0.7071f, 0, sr);   apH[k].set (Biquad::HP, f2, 0.7071f, 0, sr);
+            }
+            lastX[0] = v[0]; lastX[1] = f2;
+        }
+        const float slope = 1.0f / v[5] - 1.0f, sp = v[6] * 0.01f, mk = dbToGain (v[7]);
+        const float atk[3] = { lerp (40.0f, 3.0f, sp), lerp (25.0f, 1.0f, sp), lerp (10.0f, 0.3f, sp) };
+        const float rel[3] = { lerp (500.0f, 90.0f, sp), lerp (350.0f, 60.0f, sp), lerp (200.0f, 35.0f, sp) };
+        float aA[3], aR[3];
+        for (int k = 0; k < 3; ++k) { aA[k] = onePoleCoef (atk[k], sr); aR[k] = onePoleCoef (rel[k], sr); }
+        float* ch[2] = { L, R };
+        float m = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            float band[2][3];
+            for (int c = 0; c < 2; ++c)
+            {
+                const float x = ch[c][i];
+                const float lo = lp1[1].tick (lp1[0].tick (x, c), c), hi = hp1[1].tick (hp1[0].tick (x, c), c);
+                // the low band passes through the upper crossover's allpass so all three bands stay phase-aligned
+                const float a = apL[0].tick (lo, c), bq = apH[0].tick (lo, c);
+                band[c][0] = apL[1].tick (a, c) + apH[1].tick (bq, c);
+                band[c][1] = lp2[1].tick (lp2[0].tick (hi, c), c);
+                band[c][2] = hp2[1].tick (hp2[0].tick (hi, c), c);
+            }
+            float outL = 0, outR = 0;
+            for (int k = 0; k < 3; ++k)
+            {
+                const float tgt = softKneeGr (gainToDb (maxAbs (band[0][k], band[1][k])) - v[2 + k], slope, 6.0f);
+                gr[k] = tgt < gr[k] ? tgt + aA[k] * (gr[k] - tgt) : tgt + aR[k] * (gr[k] - tgt);
+                const float g = dbToGain (gr[k]);
+                outL += band[0][k] * g; outR += band[1][k] * g;
+                m = std::max (m, -gr[k]);
+            }
+            L[i] = outL * mk; R[i] = outR * mk;
+        }
+        meter = clampf (m / 20.0f, 0, 1);
+    }
+};
+
+// =====================================================================================
+// v2.0: new effects
+// =====================================================================================
+struct LooperFx final : Effect
+{
+    std::vector<float> buf[2]; int maxLen = 0, len = 0, lastKnob = 0; double pos = 0; bool rec = false, have = false;
+    void prepare (double s, int b) override
+    {
+        Effect::prepare (s, b);
+        maxLen = int (45.0 * sr);
+        buf[0].assign ((size_t) maxLen + 4, 0.0f); buf[1].assign ((size_t) maxLen + 4, 0.0f);
+        len = 0; pos = 0; rec = false; have = false; lastKnob = 0;
+    }
+    void finishRecording()
+    {
+        rec = false; have = len > int (0.05 * sr); pos = 0;
+        if (! have) return;
+        const int f = std::min (len / 4, int (0.006 * sr));
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < f; ++i) { const float w = float (i) / float (f); buf[c][(size_t) i] *= w; buf[c][(size_t) (len - 1 - i)] *= w; }
+    }
+    void process (float* L, float* R, int n, const float* v, const Context& ctx) override
+    {
+        static const float bars[5] = { 0, 1, 2, 4, 8 };
+        const int knob = (int) v[0];
+        const float level = v[1] * 0.01f, decay = v[2] * 0.01f;
+        const double speed = ((int) v[3] == 0 ? 0.5 : ((int) v[3] == 2 ? 2.0 : 1.0)) * ((int) v[4] == 1 ? -1.0 : 1.0);
+        const int barLen = (int) std::min<double> (maxLen, bars[std::max (0, std::min (4, (int) v[5]))] * 4.0 * 60.0 / std::max (20.0, ctx.bpm) * sr);
+        if (knob != lastKnob)
+        {
+            if (knob == 1) { len = 0; pos = 0; rec = true; have = false; }
+            else if (rec) finishRecording();
+            if (knob == 0) pos = 0;
+            lastKnob = knob;
+        }
+        for (int i = 0; i < n; ++i)
+        {
+            const float inL = L[i], inR = R[i];
+            if (rec)
+            {
+                buf[0][(size_t) len] = inL; buf[1][(size_t) len] = inR;
+                if (++len >= maxLen || (barLen > 0 && len >= barLen)) finishRecording();   // loop closes itself after the set number of bars
+                continue;
+            }
+            if (! have || knob == 0) continue;
+            const int i0 = (int) pos; const float fr = float (pos - i0);
+            const int i1 = i0 + 1 >= len ? 0 : i0 + 1;
+            const float yl = buf[0][(size_t) i0] + fr * (buf[0][(size_t) i1] - buf[0][(size_t) i0]);
+            const float yr = buf[1][(size_t) i0] + fr * (buf[1][(size_t) i1] - buf[1][(size_t) i0]);
+            if (knob == 3) { buf[0][(size_t) i0] = buf[0][(size_t) i0] * decay + inL; buf[1][(size_t) i0] = buf[1][(size_t) i0] * decay + inR; }
+            L[i] = inL + yl * level; R[i] = inR + yr * level;
+            pos += speed;
+            if (pos >= len) pos -= len; else if (pos < 0) pos += len;
+        }
+        meter = rec ? float (len) / float (maxLen) : (have && len > 0 ? float (pos / len) : 0.0f);
+    }
+};
+
+struct FreqShiftFx final : Effect
+{
+    Hilbert hb[2]; DelayLine dl[2]; OnePole tone[2]; double ph[2] = { 0, 0 }; Smooth dly;
+    void prepare (double s, int b) override { Effect::prepare (s, b); for (auto& d : dl) d.init (int (0.32 * sr)); dly.setTime (60.0f, sr); dly.reset (0.02f * float (sr)); reset(); }
+    void reset() override { hb[0].reset(); hb[1].reset(); dl[0].clear(); dl[1].clear(); tone[0].reset(); tone[1].reset(); }
+    void process (float* L, float* R, int n, const float* v, const Context&) override
+    {
+        const float shift = v[0] + v[1], fb = v[2] * 0.01f, st = v[4] * 0.01f;
+        dly.tgt = v[3] * 0.001f * float (sr);
+        tone[0].setHz (v[5], sr); tone[1].a = tone[0].a;
+        const double inc[2] = { shift / sr, shift * (1.0 - 2.0 * st) / sr };     // Stereo: the right side shifts the other way
+        float* ch[2] = { L, R };
+        for (int i = 0; i < n; ++i)
+        {
+            const float d = std::max (2.0f, dly.next());
+            for (int c = 0; c < 2; ++c)
+            {
+                float I, Q;
+                hb[c].tick (ch[c][i] + fb * dl[c].read (d), I, Q);
+                ph[c] += inc[c]; ph[c] -= std::floor (ph[c]);
+                const float p = (float) ph[c];
+                const float y = tone[c].lp (I * fastSin2Pi (p + 0.25f) + Q * fastSin2Pi (p));
+                dl[c].push (fastTanh (y));
+                ch[c][i] = y;
+            }
+        }
+    }
+};
+
+struct WavefolderFx final : Effect
+{
+    Os4 os[2]; OnePole tone[2]; DcBlock dc[2];
+    void prepare (double s, int b) override { Effect::prepare (s, b); dc[0].setup (sr); dc[1].setup (sr); reset(); }
+    void reset() override { for (int c = 0; c < 2; ++c) { os[c].reset(); tone[c].reset(); dc[c].reset(); } }
+    void process (float* L, float* R, int n, const float* v, const Context&) override
+    {
+        const float gain = dbToGain (v[0] * 0.36f), bias = v[1] * 0.01f, shape = v[2] * 0.01f, outG = dbToGain (v[4]);
+        tone[0].setHz (v[3], sr); tone[1].a = tone[0].a;
+        auto fold = [=] (float x)
+        {
+            const float u = x * gain + bias;
+            float t = u * 0.25f + 0.25f; t -= std::floor (t);
+            const float tri = 1.0f - 4.0f * std::fabs (t - 0.5f);
+            return lerp (tri, fastSin2Pi (u * 0.25f), shape);
+        };
+        float* ch[2] = { L, R };
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < n; ++i)
+                ch[c][i] = tone[c].lp (dc[c].tick (os[c].process (ch[c][i], fold))) * outG;
+    }
+};
+
+struct UnisonFx final : Effect
+{
+    GrainShifter sh[9]; OnePole tone[2];
+    void prepare (double s, int b) override { Effect::prepare (s, b); for (auto& x : sh) x.init (int (0.07 * sr)); reset(); }
+    void reset() override { for (auto& x : sh) x.clear(); tone[0].reset(); tone[1].reset(); }
+    void process (float* L, float* R, int n, const float* v, const Context&) override
+    {
+        const int V = std::max (2, std::min (7, (int) v[0]));
+        const float det = v[1], spread = v[2] * 0.01f, up = v[3] * 0.01f, sub = v[4] * 0.01f;
+        tone[0].setHz (v[5], sr); tone[1].a = tone[0].a;
+        float ratio[7], gl[7], gr[7];
+        for (int k = 0; k < V; ++k)
+        {
+            const float pos = V > 1 ? (float (k) / float (V - 1)) * 2.0f - 1.0f : 0.0f;
+            ratio[k] = std::exp2 (det * pos * (1.0f + 0.13f * float (k % 3)) / 1200.0f);
+            const float a = ((k & 1 ? 1.0f : -1.0f) * spread * (0.4f + 0.6f * std::fabs (pos)) + 1.0f) * kPi * 0.25f;
+            gl[k] = std::cos (a); gr[k] = std::sin (a);
+        }
+        const float norm = 1.5f / std::sqrt (float (V));
+        const float fs = float (sr);
+        for (int i = 0; i < n; ++i)
+        {
+            const float m = (L[i] + R[i]) * 0.5f;
+            float ol = 0, orr = 0;
+            for (int k = 0; k < V; ++k)
+            {
+                const float y = sh[k].tick (m, ratio[k], (0.038f + 0.004f * float (k)) * fs);
+                ol += y * gl[k]; orr += y * gr[k];
+            }
+            ol *= norm; orr *= norm;
+            if (up > 0.0f)  { const float y = sh[7].tick (m, 2.0f, 0.05f * fs) * up * 0.6f; ol += y; orr += y; }
+            if (sub > 0.0f) { const float y = sh[8].tick (m, 0.5f, 0.06f * fs) * sub * 0.8f; ol += y; orr += y; }
+            L[i] = tone[0].lp (ol); R[i] = tone[1].lp (orr);
+        }
+    }
+};
+
+struct BellsFx final : Effect
+{
+    static constexpr int NP = 8;
+    Svf res[NP]; OnePole exLP; float amp[NP] = {}, gl[NP] = {}, gr[NP] = {}, inG[NP] = {}; bool on[NP] = {}; float last[6] = { -9, -9, -9, -9, -9, -9 };
+    void prepare (double s, int b) override { Effect::prepare (s, b); exLP.setHz (250.0f, sr); for (auto& x : last) x = -9; reset(); }
+    void reset() override { for (auto& r : res) r.reset(); exLP.reset(); }
+    void process (float* L, float* R, int n, const float* v, const Context&) override
+    {
+        static const float ratios[5][NP] = {
+            { 0.5f, 1.0f, 1.183f, 1.506f, 2.0f, 2.514f, 2.662f, 3.011f },      // church bell
+            { 1.0f, 1.59f, 2.32f, 3.14f, 4.25f, 5.4f, 6.63f, 8.2f },           // glass
+            { 1.0f, 1.52f, 2.0f, 2.64f, 3.03f, 3.97f, 4.56f, 5.41f },          // gamelan
+            { 0.5f, 1.0f, 1.47f, 2.09f, 2.76f, 3.5f, 4.4f, 5.4f },             // tubular
+            { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f } };              // harmonic
+        bool ch = false;
+        for (int k = 0; k < 6; ++k) if (v[k] != last[k]) { ch = true; last[k] = v[k]; }
+        if (ch)
+        {
+            const float root = 261.63f * std::exp2 (v[0] / 12.0f) * ((int) v[1] == 0 ? 0.5f : ((int) v[1] == 2 ? 2.0f : 1.0f));
+            const int mat = std::max (0, std::min (4, (int) v[2]));
+            const float bright = 0.35f + v[4] * 0.0065f, spread = v[5] * 0.01f;
+            for (int k = 0; k < NP; ++k)
+            {
+                const float f = root * ratios[mat][k];
+                on[k] = f < float (sr) * 0.42f;
+                if (! on[k]) continue;
+                const float t60 = v[3] / (1.0f + 0.25f * float (k));                 // upper partials die sooner
+                const float q = std::max (2.0f, kPi * f * t60 / 6.9f);
+                res[k].set (f, q, sr);
+                inG[k] = 45.0f / q * std::sqrt (f / 500.0f);
+                amp[k] = std::pow (bright, float (k));
+                const float a = (((k % 4 == 1 || k % 4 == 2) ? 1.0f : -1.0f) * spread * 0.8f + 1.0f) * kPi * 0.25f;
+                gl[k] = std::cos (a) * amp[k]; gr[k] = std::sin (a) * amp[k];
+            }
+        }
+        for (int i = 0; i < n; ++i)
+        {
+            const float m = (L[i] + R[i]) * 0.5f;
+            const float ex = m - exLP.lp (m);                                        // the pick attack strikes the bells
+            float ol = 0, orr = 0;
+            for (int k = 0; k < NP; ++k)
+            {
+                if (! on[k]) continue;
+                res[k].tick (ex * inG[k]);
+                ol += res[k].bp * gl[k]; orr += res[k].bp * gr[k];
+            }
+            L[i] = fastTanh (ol); R[i] = fastTanh (orr);
+        }
+    }
+};
+
+struct VinylFx final : Effect
+{
+    DelayLine dl[2]; Biquad hp, lp, honk; OnePole rumLP, crackLP; Rng rng { 3333u }; Smooth base;
+    float ph = 0, crack = 0, pop = 0, hum = 0, last[2] = { -1, -1 }; int lastRpm = -1;
+    void prepare (double s, int b) override
+    {
+        Effect::prepare (s, b);
+        for (auto& d : dl) d.init (int (0.03 * sr));
+        rumLP.setHz (35.0f, sr); crackLP.setHz (6000.0f, sr);
+        base.setTime (200.0f, sr); base.reset (0.004f * float (sr));
+        last[0] = last[1] = -1; lastRpm = -1; reset();
+    }
+    void reset() override { dl[0].clear(); dl[1].clear(); hp.reset(); lp.reset(); honk.reset(); rumLP.reset(); crackLP.reset(); crack = pop = 0; }
+    void process (float* L, float* R, int n, const float* v, const Context&) override
+    {
+        static const float rate[3] = { 0.555f, 0.75f, 1.3f };
+        const int rpm = std::max (0, std::min (2, (int) v[5]));
+        const float crk = v[0] * 0.01f, warp = v[1] * 0.01f, age = v[2] * 0.01f + (rpm == 2 ? 0.3f : 0.0f), rum = v[3] * 0.01f, wear = v[4] * 0.01f;
+        if (age != last[0] || rpm != lastRpm)
+        {
+            hp.set (Biquad::HP, 30.0f + age * 140.0f, 0.707f, 0, sr);
+            lp.set (Biquad::LP, 17000.0f * std::pow (0.2f, std::min (1.0f, age)), 0.707f, 0, sr);
+            honk.set (Biquad::Peak, 1200.0f, 0.8f, age * 5.0f, sr);
+            last[0] = age; lastRpm = rpm;
+        }
+        const float fs = float (sr), wD = warp * 0.0022f * fs;
+        base.tgt = 0.001f * fs + wD + 2.0f;
+        const float inc = rate[rpm] / fs, crackP = crk * 28.0f / fs, popP = crk * 1.2f / fs;
+        const float cDec = std::exp (-1.0f / (0.0006f * fs)), pDec = std::exp (-1.0f / (0.004f * fs));
+        const float dg = 1.0f + wear * 5.0f;
+        for (int i = 0; i < n; ++i)
+        {
+            ph += inc; if (ph >= 1) ph -= 1;
+            const float d = base.next() + wD * (0.8f * fastSin2Pi (ph) + 0.2f * fastSin2Pi (ph * 2.0f + 0.3f));   // off-centre record warp
+            if (rng.uni() < crackP) crack += rng.bi() * 0.25f;
+            if (rng.uni() < popP) pop += rng.bi() * 0.7f;
+            crack *= cDec; pop *= pDec;
+            hum += 50.0f / fs; if (hum >= 1) hum -= 1;
+            const float noise = crackLP.lp (crack + pop) * crk
+                              + (rumLP.lp (rng.bi()) * 6.0f + fastSin2Pi (hum) * 0.02f) * rum * 0.12f + rng.bi() * crk * 0.0015f;
+            float* ch[2] = { L, R };
+            for (int c = 0; c < 2; ++c)
+            {
+                dl[c].push (ch[c][i]);
+                float y = dl[c].readCubic (d);
+                if (wear > 0.0f) y = fastTanh (y * dg + 0.1f * wear) / dg * (1.0f + wear * 0.5f);   // worn groove: soft, slightly lopsided
+                ch[c][i] = lp.tick (honk.tick (hp.tick (y, c), c), c) + noise;
+            }
+        }
+    }
+};
+
+struct UnderwaterFx final : Effect
+{
+    Svf f1[2], f2[2]; DelayLine dl[2]; Rng rng { 808u };
+    float ph1 = 0, ph2 = 0, drift = 0, driftT = 0; int ctr = 0;
+    struct Bubble { bool on = false; float ph = 0, f = 400, env = 0, pan = 0.5f, rise = 1; } bub[6];
+    void prepare (double s, int b) override { Effect::prepare (s, b); for (auto& d : dl) d.init (int (0.03 * sr)); reset(); }
+    void reset() override { for (int c = 0; c < 2; ++c) { f1[c].reset(); f2[c].reset(); dl[c].clear(); } for (auto& b : bub) b.on = false; }
+    void process (float* L, float* R, int n, const float* v, const Context&) override
+    {
+        const float depth = v[0] * 0.01f, cur = v[1] * 0.01f, bubbles = v[2] * 0.01f, reso = 0.6f + v[3] * 0.035f;
+        const float fs = float (sr), baseF = 2800.0f * std::pow (0.09f, depth);
+        const float prob = bubbles * 7.0f / fs, envDec = std::exp (-1.0f / (0.05f * fs));
+        for (int i = 0; i < n; ++i)
+        {
+            if (--ctr <= 0) { ctr = int (0.3f * fs); driftT = rng.bi(); }
+            drift += (driftT - drift) * 0.00008f;
+            ph1 += 0.31f / fs; if (ph1 >= 1) ph1 -= 1;
+            ph2 += 0.83f / fs; if (ph2 >= 1) ph2 -= 1;
+            const float wob = 0.6f * fastSin2Pi (ph1) + 0.4f * fastSin2Pi (ph2);
+            const float fc = baseF * std::exp2 (cur * (0.5f * wob + 0.7f * drift));
+            const float g = fastTan (kPi * clampf (fc, 60.0f, fs * 0.4f) / fs);
+            const float d = (0.006f + cur * 0.0025f * wob) * fs;
+            if (bubbles > 0.0f && rng.uni() < prob)
+                for (auto& b : bub) if (! b.on) { b.on = true; b.ph = 0; b.f = 300.0f + 900.0f * rng.uni(); b.env = 0.5f + 0.5f * rng.uni(); b.pan = rng.uni(); b.rise = 1.0f + (4.0f + 8.0f * rng.uni()) / fs; break; }
+            float bl = 0, br = 0;
+            for (auto& b : bub)
+            {
+                if (! b.on) continue;
+                b.ph += b.f / fs; if (b.ph >= 1) b.ph -= 1;
+                b.f *= b.rise; b.env *= envDec;
+                const float s = fastSin2Pi (b.ph) * b.env * 0.06f * bubbles;
+                bl += s * (1.0f - b.pan); br += s * b.pan;
+                if (b.env < 0.002f) b.on = false;
+            }
+            float* ch[2] = { L, R };
+            for (int c = 0; c < 2; ++c)
+            {
+                dl[c].push (ch[c][i]);
+                float y = dl[c].readCubic (d * (c ? 1.07f : 1.0f));
+                f1[c].setG (g, reso); f1[c].tick (y);
+                f2[c].setG (g, 0.7f); f2[c].tick (f1[c].lp);
+                ch[c][i] = f2[c].lp * (1.0f + 0.2f * depth) + (c ? br : bl);
+            }
+        }
+    }
+};
+
+struct ExciterFx final : Effect
+{
+    Biquad hp1, hp2, lpL, lpL2; Os2 os[2]; float last[2] = { -1, -1 };
+    void prepare (double s, int b) override { Effect::prepare (s, b); last[0] = last[1] = -1; reset(); }
+    void reset() override { hp1.reset(); hp2.reset(); lpL.reset(); lpL2.reset(); os[0].reset(); os[1].reset(); }
+    void process (float* L, float* R, int n, const float* v, const Context&) override
+    {
+        if (v[0] != last[0]) { hp1.set (Biquad::HP, v[0], 0.707f, 0, sr); hp2.set (Biquad::HP, v[0] * 1.2f, 0.707f, 0, sr); last[0] = v[0]; }
+        if (v[4] != last[1]) { lpL.set (Biquad::LP, v[4], 0.707f, 0, sr); lpL2.set (Biquad::LP, v[4] * 2.5f, 0.707f, 0, sr); last[1] = v[4]; }
+        const float drive = dbToGain (6.0f + v[1] * 0.3f), odd = v[2] * 0.01f, amt = v[3] * 0.01f * 0.9f, lowAmt = v[5] * 0.01f;
+        auto shape = [=] (float u) { u *= drive; return lerp (fastTanh (u + 0.5f) - 0.4621f, fastTanh (u), odd); };
+        float* ch[2] = { L, R };
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < n; ++i)
+            {
+                const float x = ch[c][i];
+                float y = x;
+                if (amt > 0.0f) y += hp2.tick (os[c].process (hp1.tick (x, c), shape), c) * amt / std::sqrt (drive);
+                if (lowAmt > 0.0f) y += lpL2.tick (fastTanh (lpL.tick (x, c) * 5.0f) * 0.2f, c) * lowAmt;
+                ch[c][i] = y;
+            }
+    }
+};
+
+struct DoublerFx final : Effect
+{
+    DelayLine dl; OnePole tone[2], walkLP[4]; Rng rng { 2112u }; float ph[4] = { 0, 0.3f, 0.6f, 0.8f }; Smooth base;
+    void prepare (double s, int b) override
+    {
+        Effect::prepare (s, b);
+        dl.init (int (0.12 * sr));
+        for (auto& w : walkLP) w.setHz (0.7f, sr);
+        base.setTime (80.0f, sr); base.reset (22.0f);
+        reset();
+    }
+    void reset() override { dl.clear(); tone[0].reset(); tone[1].reset(); }
+    void process (float* L, float* R, int n, const float* v, const Context&) override
+    {
+        const int V = (int) v[0] == 1 ? 4 : 2;
+        base.tgt = v[1];
+        const float cents = v[2], human = v[3] * 0.01f, width = v[4] * 0.01f;
+        tone[0].setHz (v[5], sr); tone[1].a = tone[0].a;
+        const float ms = float (sr) * 0.001f;
+        static const float mult[4] = { 1.0f, 1.17f, 1.41f, 0.83f };
+        const float norm = V == 4 ? 0.6f : 0.8f;
+        for (int i = 0; i < n; ++i)
+        {
+            dl.push ((L[i] + R[i]) * 0.5f);
+            const float b = base.next();
+            float ol = 0, orr = 0;
+            for (int k = 0; k < V; ++k)
+            {
+                const float f = 0.37f + 0.11f * float (k);
+                ph[k] += f / float (sr); if (ph[k] >= 1) ph[k] -= 1;
+                const float depthMs = cents * 5.78e-4f / (k2Pi * f) * 1000.0f;                 // LFO depth that gives +/- 'cents' of pitch drift
+                const float walk = walkLP[k].lp (rng.bi()) * 60.0f * human * 3.0f;             // each "take" wanders in timing
+                const float d = clampf (b * mult[k] + depthMs * fastSin2Pi (ph[k]) + walk, 1.0f, 110.0f) * ms;
+                const float y = dl.readCubic (d);
+                const float side = (k & 1) ? 1.0f : -1.0f;
+                const float a = (side * width * (k < 2 ? 1.0f : 0.5f) + 1.0f) * kPi * 0.25f;
+                ol += y * std::cos (a) * 1.414f; orr += y * std::sin (a) * 1.414f;
+            }
+            L[i] = tone[0].lp (ol * norm); R[i] = tone[1].lp (orr * norm);
+        }
+    }
+};
+
+struct AcousticFx final : Effect
+{
+    Biquad hp, b1, b2, b3, scoop, air, lp; EnvFollower ef, es; float last[4] = { -9, -9, -9, -9 };
+    void prepare (double s, int b) override { Effect::prepare (s, b); ef.setup (0.3f, 25.0f, sr); es.setup (15.0f, 25.0f, sr); for (auto& x : last) x = -9; reset(); }
+    void reset() override { hp.reset(); b1.reset(); b2.reset(); b3.reset(); scoop.reset(); air.reset(); lp.reset(); ef.reset(); es.reset(); }
+    void process (float* L, float* R, int n, const float* v, const Context&) override
+    {
+        static const float modes[4][3] = { { 98, 196, 400 }, { 85, 170, 380 }, { 125, 245, 520 }, { 105, 215, 330 } };
+        bool ch = false;
+        for (int k = 0; k < 4; ++k) if (v[k] != last[k]) { ch = true; last[k] = v[k]; }
+        if (ch)
+        {
+            const int bd = std::max (0, std::min (3, (int) v[0]));
+            const float am = v[1] * 0.01f;
+            hp.set (Biquad::HP, 70.0f, 0.707f, 0, sr);
+            b1.set (Biquad::Peak, modes[bd][0], 4.0f, 8.0f * am, sr);
+            b2.set (Biquad::Peak, modes[bd][1], 5.0f, 6.0f * am, sr);
+            b3.set (Biquad::Peak, modes[bd][2], 6.0f, 3.5f * am, sr);
+            scoop.set (Biquad::Peak, 900.0f, 0.6f, -v[3] * 0.1f, sr);
+            air.set (Biquad::HighShelf, 4500.0f, 0.7f, v[2] * (bd == 3 ? 0.07f : 0.14f), sr);
+            lp.set (Biquad::LP, 14000.0f, 0.707f, 0, sr);
+        }
+        const float atk = v[4] * 0.01f, og = dbToGain (v[5] - 3.0f);
+        for (int i = 0; i < n; ++i)
+        {
+            const float m = maxAbs (L[i], R[i]) + 1.0e-6f;
+            const float tr = clampf (gainToDb (ef.tick (m)) - gainToDb (es.tick (m)), 0.0f, 12.0f);
+            const float g = dbToGain (tr * atk * 0.6f) * og;                       // sharpen the pick attack like a flat-top
+            float* c2[2] = { L, R };
+            for (int c = 0; c < 2; ++c)
+            {
+                float x = c2[c][i];
+                x = lp.tick (air.tick (scoop.tick (b3.tick (b2.tick (b1.tick (hp.tick (x, c), c), c), c), c), c), c);
+                c2[c][i] = x * g;
+            }
+        }
+    }
+};
+
 } // namespace
 
 std::unique_ptr<Effect> createEffect (int type)
@@ -2223,6 +2892,22 @@ std::unique_ptr<Effect> createEffect (int type)
         case FxOrbit:      e.reset (new OrbitFx()); break;
         case FxMelt:       e.reset (new MeltFx()); break;
         case FxChaos:      e.reset (new ChaosFx()); break;
+        case FxComp76:     e.reset (new Comp76Fx()); break;
+        case FxOpto:       e.reset (new OptoFx()); break;
+        case FxBusComp:    e.reset (new BusCompFx()); break;
+        case FxPedalComp:  e.reset (new PedalCompFx()); break;
+        case FxVariMu:     e.reset (new VariMuFx()); break;
+        case FxMultiband:  e.reset (new MultibandFx()); break;
+        case FxLooper:     e.reset (new LooperFx()); break;
+        case FxFreqShift:  e.reset (new FreqShiftFx()); break;
+        case FxWavefolder: e.reset (new WavefolderFx()); break;
+        case FxUnison:     e.reset (new UnisonFx()); break;
+        case FxBells:      e.reset (new BellsFx()); break;
+        case FxVinyl:      e.reset (new VinylFx()); break;
+        case FxUnderwater: e.reset (new UnderwaterFx()); break;
+        case FxExciter:    e.reset (new ExciterFx()); break;
+        case FxDoubler:    e.reset (new DoublerFx()); break;
+        case FxAcoustic:   e.reset (new AcousticFx()); break;
         default:           e.reset (new NoneFx()); type = FxNone; break;
     }
     e->type = type;

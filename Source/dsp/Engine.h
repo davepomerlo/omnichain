@@ -62,7 +62,7 @@ private:
         float fade = 0.0f, byp = 1.0f;
         Smooth mix, lvl;
         float frozen[kParamsPerSlot] = {};
-        bool wasIdle = true;
+        bool wasIdle = true, snap = true;
         std::atomic<float> meter { 0.0f };
     };
 

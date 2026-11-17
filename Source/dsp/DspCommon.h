@@ -257,4 +257,77 @@ struct GrainShifter
         return dl.read (d1) * s1 * s1 + dl.read (d2) * s2 * s2;
     }
 };
+// ---------------------------------------------------------------------------------------------
+// Oversampling with polyphase IIR half-band filters (minimum phase: no lookahead, no reported latency).
+// Coefficients designed and verified by tools/dsp_design.py (85 dB / 77 dB stop-band rejection).
+static const float kHb1[6] = { 0.0542175258f, 0.1967979698f, 0.3830873273f, 0.5731364111f, 0.7487209444f, 0.9142937097f };
+static const float kHb2[3] = { 0.0814300232f, 0.3156598402f, 0.7097708001f };
+
+template <int NC>
+struct Halfband
+{
+    const float* c = nullptr;
+    float ux[NC] = {}, uy[NC] = {}, dx[NC] = {}, dy[NC] = {};
+    void reset() { for (int i = 0; i < NC; ++i) ux[i] = uy[i] = dx[i] = dy[i] = 0.0f; }
+    inline void up (float x, float& o0, float& o1)
+    {
+        float a = x, b = x;
+        for (int i = 0; i < NC; i += 2) { const float y = c[i] * (a - uy[i]) + ux[i]; ux[i] = a; uy[i] = y; a = y; }
+        for (int i = 1; i < NC; i += 2) { const float y = c[i] * (b - uy[i]) + ux[i]; ux[i] = b; uy[i] = y; b = y; }
+        o0 = a; o1 = b;
+    }
+    inline float down (float s0, float s1)
+    {
+        float a = s1, b = s0;
+        for (int i = 0; i < NC; i += 2) { const float y = c[i] * (a - dy[i]) + dx[i]; dx[i] = a; dy[i] = y; a = y; }
+        for (int i = 1; i < NC; i += 2) { const float y = c[i] * (b - dy[i]) + dx[i]; dx[i] = b; dy[i] = y; b = y; }
+        return 0.5f * (a + b);
+    }
+};
+
+struct Os2    // run f() at 2x the sample rate
+{
+    Halfband<6> h;
+    Os2() { h.c = kHb1; }
+    void reset() { h.reset(); }
+    template <class F> inline float process (float x, F&& f) { float a, b; h.up (x, a, b); a = f (a); b = f (b); return h.down (a, b); }
+};
+
+struct Os4    // run f() at 4x the sample rate
+{
+    Halfband<6> h1; Halfband<3> h2;
+    Os4() { h1.c = kHb1; h2.c = kHb2; }
+    void reset() { h1.reset(); h2.reset(); }
+    template <class F> inline float process (float x, F&& f)
+    {
+        float a, b, c, d;
+        h1.up (x, a, b);
+        h2.up (a, c, d); c = f (c); d = f (d); a = h2.down (c, d);
+        h2.up (b, c, d); c = f (c); d = f (d); b = h2.down (c, d);
+        return h1.down (a, b);
+    }
+};
+
+// 90-degree phase splitter (Olli Niemitalo's allpass pair), within 0.7 degrees from 40 Hz to 20 kHz
+struct Hilbert
+{
+    float x1[2][4] = {}, x2[2][4] = {}, y1[2][4] = {}, y2[2][4] = {}, d = 0;
+    void reset() { for (auto& a : x1) for (auto& v : a) v = 0; for (auto& a : x2) for (auto& v : a) v = 0; for (auto& a : y1) for (auto& v : a) v = 0; for (auto& a : y2) for (auto& v : a) v = 0; d = 0; }
+    inline void tick (float x, float& I, float& Q)
+    {
+        static const float c[2][4] = { { 0.47940087f, 0.87621849f, 0.97659759f, 0.99749926f }, { 0.16175850f, 0.73302893f, 0.94534970f, 0.99059916f } }; // a^2
+        float p[2];
+        for (int k = 0; k < 2; ++k)
+        {
+            float v = x;
+            for (int s = 0; s < 4; ++s)
+            {
+                const float y = c[k][s] * (v + y2[k][s]) - x2[k][s];
+                x2[k][s] = x1[k][s]; x1[k][s] = v; y2[k][s] = y1[k][s]; y1[k][s] = y; v = y;
+            }
+            p[k] = v;
+        }
+        I = d; d = p[0]; Q = p[1];
+    }
+};
 } // namespace oc

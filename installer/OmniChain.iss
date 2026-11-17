@@ -19,7 +19,7 @@ OutputBaseFilename=OmniChain-Windows-Setup
 LicenseFile=..\LICENSE
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
-Compression=lzma2
+Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\OmniChain.exe
@@ -33,6 +33,7 @@ Name: "custom"; Description: "Custom"; Flags: iscustom
 Name: "app"; Description: "OmniChain app (play without a DAW)"; Types: full app custom
 Name: "vst3"; Description: "VST3 plugin (FL Studio, Ableton, Cubase, Reaper, Studio One...)"; Types: full
 Name: "clap"; Description: "CLAP plugin (Bitwig, Reaper, Studio One 7)"; Types: full
+Name: "library"; Description: "Factory library: 58 amp and pedal captures + 102 impulse responses (about 27 MB)"; Types: full app custom
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Components: app
@@ -43,6 +44,7 @@ Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion; Components: app
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Art}\VST3\OmniChain.vst3\*"; DestDir: "{commoncf64}\VST3\OmniChain.vst3"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: vst3
 Source: "{#Art}\CLAP\OmniChain.clap"; DestDir: "{commoncf64}\CLAP"; Flags: ignoreversion; Components: clap
+Source: "..\OmniChain Library\*"; DestDir: "{commonappdata}\OmniChain\OmniChain Library"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: library
 
 [Icons]
 Name: "{group}\OmniChain"; Filename: "{app}\OmniChain.exe"; Components: app

@@ -55,6 +55,9 @@ public:
     void fileDragExit (const juce::StringArray&) override { dragOver = false; repaint(); }
     void filesDropped (const juce::StringArray& files, int, int) override;
     void openFileChooser();
+    void showLoadMenu();
+    void addLibraryFolder (juce::PopupMenu&, const juce::File& dir, bool nam, const juce::File& current);
+    juce::Array<juce::File> libraryFiles;
 
 private:
     void rebuildForType (int type);

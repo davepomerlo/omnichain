@@ -10,6 +10,7 @@ struct PresetSlot
     float level = 0.0f;           // dB
     std::vector<float> values;    // real values in parameter order; NAN or missing = default
     bool bypass = false;
+    const char* file = nullptr;   // NAM / IR file, relative to the OmniChain Library folder
 };
 
 struct PresetDef

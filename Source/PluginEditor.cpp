@@ -120,6 +120,7 @@ Knob::Knob()
     name.setColour (Label::textColourId, textDim);
     value.setJustificationType (Justification::centred);
     value.setFont (Font (11.5f));
+    name.setMinimumHorizontalScale (0.6f); value.setMinimumHorizontalScale (0.6f);
     name.setInterceptsMouseClicks (false, false);
     value.setInterceptsMouseClicks (false, false);
     addAndMakeVisible (slider); addAndMakeVisible (name); addAndMakeVisible (value);
@@ -153,7 +154,7 @@ SlotCard::SlotCard (OmniChainProcessor& p, OmniChainEditor& e, int i) : proc (p)
         if (id > 0 && id - 1 != proc.getSlotType (index))
         {
             proc.setSlotType (index, id - 1, true);
-            if (oc::typeUsesResource (id - 1)) openFileChooser();
+            if (oc::typeUsesResource (id - 1)) showLoadMenu();
         }
     };
     addAndMakeVisible (typeBox);
@@ -182,10 +183,10 @@ SlotCard::SlotCard (OmniChainProcessor& p, OmniChainEditor& e, int i) : proc (p)
     fileLabel.setMinimumHorizontalScale (0.6f);
     fileLabel.setInterceptsMouseClicks (false, false);
     addChildComponent (fileLabel);
-    loadBtn.setTooltip ("Load a file (or drag one from Explorer onto this slot)");
+    loadBtn.setTooltip ("Pick from the factory library or load your own file (you can also drag a file onto this slot)");
     filePrev.setTooltip ("Previous file in the same folder");
     fileNext.setTooltip ("Next file in the same folder");
-    loadBtn.onClick = [this] { openFileChooser(); };
+    loadBtn.onClick = [this] { showLoadMenu(); };
     filePrev.onClick = [this] { proc.stepSlotFile (index, -1); };
     fileNext.onClick = [this] { proc.stepSlotFile (index, 1); };
     for (auto* b : { &loadBtn, &filePrev, &fileNext }) addChildComponent (*b);
@@ -255,6 +256,7 @@ void SlotCard::rebuildForType (int type)
     mixLabel.setVisible (! empty); levelLabel.setVisible (! empty);
     power.setColour (TextButton::buttonOnColourId, accent);
     power.setVisible (! empty);
+    resized();
     repaint();
 }
 
@@ -312,9 +314,12 @@ void SlotCard::resized()
     mixLabel.setBounds (bl.removeFromTop (14)); mix.setBounds (bl);
     levelLabel.setBounds (br.removeFromTop (14)); level.setBounds (br);
     r.removeFromTop (2);
-    const int cw = r.getWidth() / 3, ch = r.getHeight() / 2;
+    // effects with 7 or 8 knobs use a 4-column grid; the rest keep the roomier 3 columns
+    const auto& inf = oc::getInfo (shownType < 0 ? 0 : shownType);
+    const int cols = (inf.params[6].name != nullptr || inf.params[7].name != nullptr) ? 4 : 3;
+    const int cw = r.getWidth() / cols, ch = r.getHeight() / 2;
     for (int k = 0; k < oc::kParamsPerSlot; ++k)
-        knobs[k].setBounds (r.getX() + (k % 3) * cw, r.getY() + (k / 3) * ch, cw, ch);
+        knobs[k].setBounds (r.getX() + (k % cols) * cw, r.getY() + (k / cols) * ch, cw, ch);
 }
 
 void SlotCard::paint (Graphics& g)
@@ -409,6 +414,47 @@ void SlotCard::filesDropped (const StringArray& files, int, int)
     dragOver = false; repaint();
     for (auto& f : files)
         if (OmniChainProcessor::isIrFile (File (f)) || OmniChainProcessor::isNamFile (File (f))) { proc.loadSlotFile (index, File (f)); break; }
+}
+
+void SlotCard::addLibraryFolder (PopupMenu& m, const File& dir, bool nam, const File& current)
+{
+    auto dirs = dir.findChildFiles (File::findDirectories, false); dirs.sort();
+    for (auto& d : dirs)
+    {
+        PopupMenu sub;
+        addLibraryFolder (sub, d, nam, current);
+        if (sub.getNumItems() > 0) m.addSubMenu (d.getFileName(), sub, true, nullptr, current.isAChildOf (d));
+    }
+    auto files = dir.findChildFiles (File::findFiles, false, nam ? "*.nam" : "*.wav"); files.sort();
+    for (auto& f : files)
+    {
+        libraryFiles.add (f);
+        m.addItem (100 + libraryFiles.size() - 1, f.getFileNameWithoutExtension(), true, f == current);
+    }
+}
+
+void SlotCard::showLoadMenu()
+{
+    const bool nam = proc.getSlotType (index) == oc::FxNam;
+    PopupMenu m;
+    m.addItem (1, "Browse for your own file...");
+    const auto root = OmniChainProcessor::getLibraryFolder().getChildFile (nam ? "NAM" : "IR");
+    libraryFiles.clear();
+    m.addSeparator();
+    if (root.isDirectory())
+    {
+        m.addSectionHeader (nam ? "Factory library: amp and pedal captures" : "Factory library: impulse responses");
+        addLibraryFolder (m, root, nam, proc.getSlotFile (index));
+    }
+    else m.addItem (2, "Get the free factory library (opens the download page)");
+    SafePointer<SlotCard> safe (this);
+    m.showMenuAsync (PopupMenu::Options().withTargetComponent (&loadBtn), [safe] (int r)
+    {
+        if (safe == nullptr || r == 0) return;
+        if (r == 1) safe->openFileChooser();
+        else if (r == 2) URL ("https://davepomerlo.github.io/omnichain/#library").launchInDefaultBrowser();
+        else if (isPositiveAndBelow (r - 100, safe->libraryFiles.size())) safe->proc.loadSlotFile (safe->index, safe->libraryFiles[r - 100]);
+    });
 }
 
 void SlotCard::openFileChooser()
@@ -780,7 +826,7 @@ void OmniChainEditor::paint (Graphics& g)
     g.drawText ("OMNICHAIN", 20, 14, 260, 32, Justification::centredLeft);
     g.setFont (Font (12.0f));
     g.setColour (ocui::textDim);
-    g.drawText ("modular multi-fx  |  46 effects incl. IR & NAM loaders  |  0 samples latency", 22, 46, 360, 16, Justification::centredLeft);
+    g.drawText ("modular multi-fx  |  62 effects  |  NAM + IR library  |  0 samples latency", 22, 46, 360, 16, Justification::centredLeft);
 
     // meters
     auto drawMeter = [&] (int x, float lvl, const char* lbl)

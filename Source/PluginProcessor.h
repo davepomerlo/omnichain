@@ -54,6 +54,8 @@ public:
     juce::File getSlotFile (int slot) const;
     juce::String getSlotFileText (int slot, int& severity);     // severity: 0 ok, 1 warning, 2 error
     static juce::File getContentFolder (bool nam);
+    static juce::File getLibraryFolder();                       // factory NAM captures + IRs ({} if not installed)
+    static juce::File resolveLibraryFile (const juce::File& saved);
     juce::File lastFileFolder;
 
     // ---- standalone-app helpers (also harmless inside a DAW) ----
@@ -79,6 +81,7 @@ private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     void setParamValue (juce::RangedAudioParameter* p, float normalised);
     void setSlotPath (int slot, const juce::String& path);
+    void migrateOldState (int fromVersion);
     void clearSlotResource (int slot);
     void reloadResourcesFromState();
     std::shared_ptr<const oc::Resource> loadIr (const juce::File& f, juce::String& error);

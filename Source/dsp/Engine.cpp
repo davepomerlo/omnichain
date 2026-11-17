@@ -69,7 +69,7 @@ void Engine::prepare (double sampleRate, int maxBlockSize)
         s.fade = 1.0f;
         const bool b = refs[i].bypass && refs[i].bypass->load() > 0.5f;
         s.byp = b ? 1.0f : 0.0f;
-        s.wasIdle = true;
+        s.wasIdle = true; s.snap = true;
         s.mix.setTime (20.0f, sr); s.mix.reset (refs[i].mix ? refs[i].mix->load() * 0.01f : 1.0f);
         s.lvl.setTime (20.0f, sr); s.lvl.reset (refs[i].level ? dbToGain (refs[i].level->load()) : 1.0f);
         const auto& info = getInfo (t);
@@ -148,7 +148,7 @@ void Engine::swapRuntime (Slot& a, Slot& b)
     std::swap (a.fade, b.fade); std::swap (a.byp, b.byp);
     std::swap (a.mix, b.mix); std::swap (a.lvl, b.lvl);
     for (int k = 0; k < kParamsPerSlot; ++k) std::swap (a.frozen[k], b.frozen[k]);
-    std::swap (a.wasIdle, b.wasIdle);
+    std::swap (a.wasIdle, b.wasIdle); std::swap (a.snap, b.snap);
     const float m = a.meter.load(); a.meter.store (b.meter.load()); b.meter.store (m);
 }
 
@@ -212,6 +212,7 @@ void Engine::processChunk (float* L, float* R, int n, const Context& ctx)
                 s.activeType.store (r->type, std::memory_order_release);
                 s.fade = 0.0f;
                 s.wasIdle = false;
+                s.snap = true;
             }
 
         Effect* fx = s.active;
@@ -228,13 +229,26 @@ void Engine::processChunk (float* L, float* R, int n, const Context& ctx)
 
         const bool idle = (s.fade <= 0.0f && fadeTgt <= 0.0f) || (s.byp >= 1.0f && bypassed);
         if (idle) { s.wasIdle = true; s.meter.store (0.0f, std::memory_order_relaxed); if (! match) s.fade = 0.0f; continue; }
-        if (s.wasIdle) { fx->reset(); s.wasIdle = false; }
+        if (s.wasIdle) { fx->reset(); s.wasIdle = false; s.snap = true; }
 
         const auto& info = getInfo (fx->type);
         if (match)
+        {
+            // continuous knobs glide to their target (~25 ms) so automation and knob moves don't zipper
+            const float coef = 1.0f - std::exp (-float (n) / (0.025f * float (sr)));
             for (int k = 0; k < kParamsPerSlot; ++k)
-                if (info.params[k].name && rf.p[k])
-                    s.frozen[k] = paramToReal (info.params[k], rf.p[k]->load (std::memory_order_relaxed));
+            {
+                const auto& pi = info.params[k];
+                if (pi.name == nullptr || rf.p[k] == nullptr) continue;
+                const float tgt = paramToReal (pi, rf.p[k]->load (std::memory_order_relaxed));
+                const bool glide = ! s.snap && pi.curve != Curve::Choice && pi.curve != Curve::Int;
+                if (glide && std::fabs (tgt - s.frozen[k]) > 1.0e-4f * std::fabs (pi.max - pi.min))
+                    s.frozen[k] += (tgt - s.frozen[k]) * coef;
+                else
+                    s.frozen[k] = tgt;
+            }
+            s.snap = false;
+        }
 
         std::memcpy (wl, L, sizeof (float) * (size_t) n);
         std::memcpy (wr, R, sizeof (float) * (size_t) n);

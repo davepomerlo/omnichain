@@ -235,6 +235,133 @@ const std::vector<PresetDef>& getFactoryPresets()
             { FxFreeze, 100, 0, { 0, 50, 300, 2, 20, 5000 } },
             { FxChaos, 45, 0, { 450, 60, 0.6f, 65, 4500, 90 } },
             { FxGhostVerb, 40, 0, { 80, 6, 60, 500, 40, 20 } } } },
+        // ---- v2.0: compressors, new effects, and factory-library rigs ----
+        { "Country Squeeze", {
+            { FxPedalComp, 100, 0, { 65, 0, 70, 20, 0 } },
+            { FxAmp, 100, 0, { 22, 5, 5, 6.5f, 6, 1, 5, 1 } },
+            { FxDelay, 22, 0, { 125, 0, 15, 5000, 1, 10 } },
+            { FxSpring, 22, 0, { 2, 4500, 60, 40, 50 } } } },
+
+        { "All-In Drum Crush", {
+            { FxComp76, 60, 0, { 26, -8, 0.05f, 80, 4 } },
+            { FxTape, 100, 0, { 6, 0, 0, 0, 60, 0, 2 } },
+            { FxLimiter, 100, 0, { 2, -0.5f, 60, 60, 2 } } } },
+
+        { "Master Glue (Bus + Multiband)", {
+            { FxEq, 100, 0, { 28, 0.5f, 2500, 0, 1, 20000, 0.9f, 0 } },
+            { FxMultiband, 100, 0, { 160, 3500, -22, -20, -24, 2.5f, 40, 2 } },
+            { FxBusComp, 100, 0, { -14, 1, 4, 4, 1.5f, 80 } },
+            { FxExciter, 100, 0, { 6000, 35, 60, 20, 70, 15 } },
+            { FxLimiter, 100, 0, { 1.5f, -0.3f, 80, 50, 0 } } } },
+
+        { "Smooth Opto Vocal / Bass", {
+            { FxOpto, 100, 0, { 45, 5, 0, 20 } },
+            { FxVariMu, 100, 0, { 4, -12, 3, 0, 40 } },
+            { FxEq, 100, 0, { 60, 0, 3000, 1.5f, 2, 20000, 0.7f, 0 } } } },
+
+        { "Looper Practice Rig", {
+            { FxCompressor, 100, 0, { -22, 3, 10, 150, 3, 40, 20 } },
+            { FxAmp, 100, 0, { 30, 5, 5.5f, 6, 5.5f, 2, 5, 0 } },
+            { FxDelay, 18, 0, { D, 7, 25, 4500, 1, 15, 60, 0 } },
+            { FxReverb, 18, 0, { 55, 2, 50, 15, 30, 0, 120, 100 } },
+            { FxLooper, 100, 0, { 0, 100, 100, 1, 0, 3 } } } },
+
+        { "Plugged-In Acoustic", {
+            { FxAcoustic, 100, 0, { 0, 65, 55, 55, 35, 0 } },
+            { FxCompressor, 100, 0, { -22, 2.5f, 15, 200, 3, 30, 20 } },
+            { FxDoubler, 25, 0, { 0, 24, 6, 40, 100, 9000 } },
+            { FxReverb, 20, 0, { 55, 1.8f, 45, 15, 25, 0, 150, 110 } } } },
+
+        { "Twelve-Player Section", {
+            { FxUnison, 70, 0, { 7, 22, 100, 15, 0, 11000 } },
+            { FxDoubler, 40, 0, { 1, 28, 10, 50, 100, 9000 } },
+            { FxReverb, 28, 0, { 70, 3, 45, 20, 40, 0, 150, 130 } } } },
+
+        { "Bell Tower", {
+            { FxBells, 50, 0, { 2, 1, 0, 4, 60, 80 } },
+            { FxDelay, 25, 0, { D, 5, 40, 5000, 3, 15, 0, 0 } },
+            { FxGhostVerb, 40, 0, { 85, 8, 50, 500, 40, 20 } } } },
+
+        { "Ring-Bell Alien (Freq Shift)", {
+            { FxFreqShift, 60, 0, { 180, 0, 55, 90, 100, 9000 } },
+            { FxFlanger, 50, 0, { 0.1f, 60, 2, 50, 60, 0 } },
+            { FxReverb, 30, 0, { 75, 4, 40, 25, 50, 0, 200, 140 } } } },
+
+        { "West Coast Fold", {
+            { FxCompressor, 100, 0, { -24, 4, 5, 120, 4, 30, 20 } },
+            { FxWavefolder, 100, 0, { 55, 15, 60, 6000, -13 } },
+            { FxLadder, 100, 0, { 3500, 35, 3, 0, 0.2f, 1.2f } },
+            { FxDelay, 25, 0, { D, 8, 40, 5000, 3, 15, 0, 0 } } } },
+
+        { "Dusty 45", {
+            { FxAmp, 100, 0, { 22, 5, 6, 5, 5, 1, 5, 2 } },
+            { FxVinyl, 100, 0, { 40, 35, 55, 25, 30, 1 } },
+            { FxSpring, 25, 0, { 2.5f, 3500, 60, 40, 40 } } } },
+
+        { "Twenty Thousand Leagues", {
+            { FxUnderwater, 100, 0, { 65, 50, 45, 50 } },
+            { FxChorus, 40, 0, { 0.25f, 60, 14, 3, 100, 6000 } },
+            { FxGhostVerb, 45, 0, { 90, 9, 40, 600, 50, 0 } } } },
+
+        { "Chainsaw (HM mode)", {
+            { FxGate, 100, 0, { -48, 0.5f, 30, 60, -80, 6, 120 } },
+            { FxDistortion, 100, 0, { 80, 55, 5, 0, 0, -17 } },
+            { FxAmp, 100, 0, { 40, 6, 5, 6, 6, 3, 5, 3 } } } },
+
+        { "Modern Tight Rhythm (new amp voicing)", {
+            { FxGate, 100, 0, { -50, 0.5f, 30, 60, -80, 6, 120 } },
+            { FxOverdrive, 100, 0, { 5, 65, 900, 0, 10, 0, 0 } },
+            { FxAmp, 100, 0, { 70, 6, 4.5f, 6.5f, 6.5f, 3, 5, 3 } },
+            { FxEq, 100, 0, { 70, 1.5f, 500, -2, 1, 11000, 0.9f, 0 } } } },
+
+        { "Fat Bass Amp", {
+            { FxOpto, 100, 0, { 40, 5, 0, 0 } },
+            { FxAmp, 100, 0, { 35, 6.5f, 5.5f, 4.5f, 4, 4, 5, 4 } },
+            { FxExciter, 100, 0, { 3000, 30, 50, 15, 70, 35 } } } },
+
+        { "Library: Twin Clean + American 2x12", {
+            { FxPedalComp, 100, 0, { 40, 0, 50, 0, 20 } },
+            { FxNam, 100, 0, { 0, 0, 0, 0, 0, 1, -80 }, false, "NAM/Amps - Clean/Twin Reverb - Normal Bright (Tim R).nam" },
+            { FxCabIR, 100, 0, { 70, 20000, 250, 0 }, false, "IR/Guitar Cabs/American 2x12 Open Back/American 2x12 Open Back - Mix Dynamic + Ribbon.wav" },
+            { FxSpring, 22, 0, { 2, 4500, 60, 40, 40 } } } },
+
+        { "Library: AC15 Chime + Alnico Blue", {
+            { FxNam, 100, 0, { 0, 0, 0, 0, 0, 1, -80 }, false, "NAM/Amps - Clean/Vox AC15 - Top Boost (Phillipe P).nam" },
+            { FxCabIR, 100, 0, { 70, 20000, 250, 0 }, false, "IR/Guitar Cabs/Alnico Blue 2x12 Open Back/Alnico Blue 2x12 Open Back - Dynamic - Cap Edge.wav" },
+            { FxTremolo, 100, 0, { 5, 40, 0, 0, 0, 0 }, true },
+            { FxReverb, 20, 0, { 50, 1.8f, 50, 10, 25, 0, 120, 100 } } } },
+
+        { "Library: JCM2000 Crunch + Green 4x12", {
+            { FxNam, 100, 0, { 0, 0, 0, 0, 0, 1, -70 }, false, "NAM/Amps - Crunch/JCM2000 - Crunch (Tim R).nam" },
+            { FxCabIR, 100, 0, { 80, 20000, 250, 0 }, false, "IR/Guitar Cabs/British 4x12 - Green 25W/British 4x12 - Green 25W - Mix Dynamic + Ribbon.wav" },
+            { FxDelay, 18, 0, { 340, 0, 25, 4000, 1, 15, 40, 0 } },
+            { FxReverb, 15, 0, { 40, 1.5f, 50, 10, 20, 0, 120, 100 } } } },
+
+        { "Library: 5150 Rhythm + V-Type 4x12", {
+            { FxGate, 100, 0, { -52, 0.5f, 30, 60, -80, 6, 120 } },
+            { FxNam, 100, 0, { 0, 0, 0, 0, 0, 1, -62 }, false, "NAM/Amps - High Gain/5150 Block Letter - Boosted (Helga B).nam" },
+            { FxCabIR, 100, 0, { 90, 12000, 250, 0 }, false, "IR/Guitar Cabs/British 4x12 - V-Type 60W/British 4x12 - V-Type 60W - Dynamic - Cap Edge.wav" } } },
+
+        { "Library: Mark IV Lead + Oversize 4x12", {
+            { FxNam, 100, 0, { 0, 0, 0, 0, 0, 1, -62 }, false, "NAM/Amps - High Gain/Mesa Mark IV - Lead (Roman A).nam" },
+            { FxCabIR, 100, 0, { 80, 14000, 250, 0 }, false, "IR/Guitar Cabs/Modern Oversize 4x12/Modern Oversize 4x12 - Mix Dynamic + Ribbon.wav" },
+            { FxDelay, 22, 0, { D, 4, 30, 4000, 2, 25, 50, 0 } },
+            { FxReverb, 20, 0, { 65, 2.5f, 45, 20, 35, 0, 150, 110 } } } },
+
+        { "Library: Swedish Chainsaw", {
+            { FxGate, 100, 0, { -50, 0.5f, 30, 60, -80, 6, 120 } },
+            { FxNam, 100, 0, { 0, 0, 0, 0, 0, 1, -60 }, false, "NAM/Pedals/Boss HM-2 - Swedish Chainsaw (Peter N).nam" },
+            { FxNam, 100, 8, { 0, 0, 0, 0, 0, 1, -80 }, false, "NAM/Amps - Crunch/JCM900 Dual Reverb - Ch A Gain 6 (Tim R).nam" },
+            { FxCabIR, 100, 0, { 90, 11000, 250, 0 }, false, "IR/Guitar Cabs/British 4x12 - Seventy-Five/British 4x12 - Seventy-Five - Dynamic - Cap.wav" } } },
+
+        { "Library: dUg Bass + 8x10 Fridge", {
+            { FxOpto, 100, 0, { 35, 5, 0, 0 } },
+            { FxNam, 100, 0, { 0, 0, 0, 0, 0, 1, -80 }, false, "NAM/Bass/Tech21 dUg DP-3X Bass Preamp (Jason Z).nam" },
+            { FxCabIR, 100, 0, { 35, 9000, 250, 0 }, false, "IR/Bass Cabs/Bass 8x10 Fridge/Bass 8x10 Fridge - Dynamic - Cap.wav" } } },
+
+        { "Library: Plate Reverb (IR)", {
+            { FxAmp, 100, 0, { 20, 5, 5, 6, 5.5f, 1, 5, 1 } },
+            { FxCabIR, 30, 0, { 150, 9000, 1000, 0 }, false, "IR/Spaces/Bright Plate.wav" } } },
     };
     return presets;
 }

@@ -6,7 +6,7 @@
 
 namespace oc
 {
-constexpr int kParamsPerSlot = 6;
+constexpr int kParamsPerSlot = 8;   // 6 until v1.5; knobs 7 and 8 added in v2.0
 
 struct Context
 {
@@ -56,6 +56,9 @@ enum EffectType
     FxWah, FxFreeze, FxStepFilter, FxArp, FxStrings, FxSpiral, FxGhostVerb, FxFeedback,
     // Added in 1.3
     FxTapEnsemble, FxSynth, FxBarber, FxRadio, FxOrbit, FxMelt, FxChaos,
+    // Added in 2.0
+    FxComp76, FxOpto, FxBusComp, FxPedalComp, FxVariMu, FxMultiband,
+    FxLooper, FxFreqShift, FxWavefolder, FxUnison, FxBells, FxVinyl, FxUnderwater, FxExciter, FxDoubler, FxAcoustic,
     NumEffectTypes
 };
 

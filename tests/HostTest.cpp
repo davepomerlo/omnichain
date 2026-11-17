@@ -224,6 +224,55 @@ int main (int argc, char** argv)
         snapshot (ps, outDir + "/omnichain_standalone.png");
     }
 
+
+    // 9. v2.0: projects saved by v1.x must load unchanged (new knobs get defaults, Distortion mode list grew)
+    {
+        OmniChainProcessor a; a.setPlayConfigDetails (2, 2, sr, bs); a.prepareToPlay (sr, bs);
+        a.setSlotType (0, oc::FxDistortion, true); a.setSlotType (1, oc::FxDelay, true); a.setSlotType (2, oc::FxAmp, true);
+        MemoryBlock mb2; a.getStateInformation (mb2);
+        auto xml = AudioProcessor::getXmlFromBinary (mb2.getData(), (int) mb2.getSize());
+        auto tree = ValueTree::fromXml (*xml);
+        tree.setProperty ("formatVersion", 1, nullptr);
+        for (int i = tree.getNumChildren(); --i >= 0;)
+        {
+            auto c = tree.getChild (i); const auto id = c.getProperty ("id").toString();
+            if (id.endsWith ("_p7") || id.endsWith ("_p8")) tree.removeChild (i, nullptr);
+            if (id == "s1_p3") c.setProperty ("value", 1.0f, nullptr);      // v1.x: mode 4 of 4 = Octave Fuzz
+        }
+        MemoryBlock old; AudioProcessor::copyXmlToBinary (*tree.createXml(), old);
+        OmniChainProcessor b; b.setPlayConfigDetails (2, 2, sr, bs); b.prepareToPlay (sr, bs);
+        for (int sl = 0; sl < 3; ++sl) { b.param (sl, "p7")->setValueNotifyingHost (0.93f); b.param (sl, "p8")->setValueNotifyingHost (0.93f); }
+        b.setStateInformation (old.getData(), (int) old.getSize());
+        auto real = [&] (int sl, int k) { return oc::paramToReal (oc::getInfo (b.getSlotType (sl)).params[k], b.param (sl, "p" + String (k + 1))->getValue()); };
+        std::printf ("v1 project -> distortion mode %.0f (want 3), delay ducking %.0f (want 0), amp master %.1f (want 5), amp voicing %.0f (want 0)\n", real (0, 2), real (1, 6), real (2, 6), real (2, 7));
+        CHECK (std::abs (real (0, 2) - 3.0f) < 0.01f, "distortion mode migrated");
+        CHECK (std::abs (real (1, 6)) < 0.01f && std::abs (real (2, 6) - 5.0f) < 0.01f && std::abs (real (2, 7)) < 0.01f, "new knobs default after migration");
+    }
+
+    // 10. factory library: found, library presets load their files, saved paths re-resolve
+    {
+        const auto lib = OmniChainProcessor::getLibraryFolder();
+        std::printf ("library folder: %s\n", lib.getFullPathName().toRawUTF8());
+        CHECK (lib.isDirectory(), "factory library found");
+        int withFiles = 0;
+        for (int i = 0; i < p.getNumPrograms(); ++i)
+            if (p.getProgramName (i).startsWith ("Library:"))
+            {
+                p.setCurrentProgram (i);
+                for (int sl = 0; sl < oc::kNumSlots; ++sl)
+                    if (oc::typeUsesResource (p.getSlotType (sl))) { int sev = 0; const auto t = p.getSlotFileText (sl, sev); if (sev == 2 || p.engine.getSlotResource (sl) == nullptr) { std::printf ("  %s slot %d: %s\n", p.getProgramName (i).toRawUTF8(), sl + 1, t.toRawUTF8()); ++failures; } else ++withFiles; }
+            }
+        std::printf ("library presets loaded %d files\n", withFiles);
+        CHECK (withFiles >= 16, "library presets");
+        const auto moved = File ("C:\\Users\\someone\\Documents\\OmniChain Library\\IR\\Spaces\\Bright Plate.wav");
+        CHECK (OmniChainProcessor::resolveLibraryFile (moved).existsAsFile(), "library path from another computer resolves");
+        for (int i = 0; i < p.getNumPrograms(); ++i) if (p.getProgramName (i).startsWith ("Library: JCM2000")) { p.setCurrentProgram (i); p.engine.service(); bool fin = true; runAudio (p, 8, bs, 2, sr, fin); p.engine.service(); const float pk = runAudio (p, 60, bs, 2, sr, fin); std::printf ("library rig peak %.2f\n", pk); CHECK (fin && pk > 0.02f && pk < 4.0f, "library rig sounds"); snapshot (p, outDir + "/omnichain_v20_library.png"); }
+        for (int i = 0; i < p.getNumPrograms(); ++i) if (p.getProgramName (i).startsWith ("Master Glue")) { p.setCurrentProgram (i); p.engine.service(); snapshot (p, outDir + "/omnichain_v20_comps.png"); }
+        const int show[8] = { oc::FxAmp, oc::FxComp76, oc::FxLooper, oc::FxFreqShift, oc::FxUnison, oc::FxBells, oc::FxVinyl, oc::FxAcoustic };
+        for (int sl = 0; sl < 8; ++sl) p.setSlotType (sl, show[sl], true);
+        p.currentPresetName = "v2.0 showcase"; p.engine.service(); snapshot (p, outDir + "/omnichain_v20.png");
+    }
+
     std::printf ("\n%s (%d failures)\n", failures ? "FAILED" : "ALL HOST TESTS OK", failures);
     return failures ? 1 : 0;
 }
