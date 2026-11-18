@@ -236,22 +236,46 @@ struct EnvFollower
     void reset() { env = 0; }
 };
 
-// Granular pitch shifter (two crossfaded taps), used by Pitch, Reverb shimmer, Delay reverse
+// Granular pitch shifter (two crossfaded taps), used by Pitch, Prism, Arp, Spiral, Unison, reverb shimmer...
+// Each time a tap starts a new grain, its start point is nudged (up to ~10 ms) to the position whose waveform best
+// matches what the other tap is playing (SOLA). Without this, the two taps partly cancel and the note warbles.
 struct GrainShifter
 {
     DelayLine dl;
-    float phase = 0;
-    void init (int maxWindow) { dl.init (maxWindow + 16); phase = 0; }
-    void clear() { dl.clear(); phase = 0; }
+    float phase = 0, off[2] = { 0, 0 };
+    bool align = true;
+    void init (int maxWindow) { dl.init (maxWindow + 1200); phase = 0; off[0] = off[1] = 0; }
+    void clear() { dl.clear(); phase = 0; off[0] = off[1] = 0; }
+    float bestOffset (float dNew, float dOther, int S) const
+    {
+        const int M = 128, a0 = (int) dOther, b0 = (int) dNew;
+        float best = -1.0e30f; int bo = 0;
+        for (int o = 0; o <= S; o += 2)
+        {
+            float c = 0, e = 1.0e-9f;
+            for (int j = 0; j < M; j += 2) { const float b = dl.at (b0 + o + j); c += dl.at (a0 + j) * b; e += b * b; }
+            const float score = c / std::sqrt (e);
+            if (score > best) { best = score; bo = o; }
+        }
+        return (float) bo;
+    }
     // ratio: playback rate (2 = +12st, -1 = reverse). window in samples.
     inline float tick (float x, float ratio, float window)
     {
         dl.push (x);
+        const float old = phase;
         phase += (1.0f - ratio) / window;
         phase -= std::floor (phase);
         float p2 = phase + 0.5f; if (p2 >= 1.0f) p2 -= 1.0f;
-        const float d1 = 2.0f + phase * window;
-        const float d2 = 2.0f + p2 * window;
+        if (align)
+        {
+            float o2 = old + 0.5f; if (o2 >= 1.0f) o2 -= 1.0f;
+            const int S = std::min (480, (int) (window * 0.3f));
+            if (std::fabs (phase - old) > 0.5f)      off[0] = bestOffset (2.0f + phase * window, 2.0f + p2 * window + off[1], S);
+            else if (std::fabs (p2 - o2) > 0.5f)     off[1] = bestOffset (2.0f + p2 * window, 2.0f + phase * window + off[0], S);
+        }
+        const float d1 = 2.0f + phase * window + off[0];
+        const float d2 = 2.0f + p2 * window + off[1];
         const float s1 = fastSin2Pi (phase * 0.5f);
         const float s2 = fastSin2Pi (p2 * 0.5f);
         return dl.read (d1) * s1 * s1 + dl.read (d2) * s2 * s2;

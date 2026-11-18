@@ -25,6 +25,7 @@ OmniChainProcessor::OmniChainProcessor()
     }
     engine.setGlobalParams (apvts.getRawParameterValue ("in"), apvts.getRawParameterValue ("out"), apvts.getRawParameterValue ("mix"));
     formats.registerBasicFormats();
+    markClean();
     startTimerHz (40);
 }
 
@@ -219,6 +220,7 @@ void OmniChainProcessor::setStateInformation (const void* data, int sizeInBytes)
             metronomeVol = (float) (double) apvts.state.getProperty ("metronomeVol", 0.5);
             migrateOldState ((int) apvts.state.getProperty ("formatVersion", 1));
             reloadResourcesFromState();
+            markClean();
             if (MessageManager::existsAndIsCurrentThread()) engine.service();
         }
 }
@@ -337,6 +339,7 @@ void OmniChainProcessor::applyPreset (const PresetDef& p)
     auto* out = apvts.getParameter ("out"); setParamValue (out, out->convertTo0to1 (p.outDb));
     auto* mx = apvts.getParameter ("mix");  setParamValue (mx, 1.0f);
     currentPresetName = p.name;
+    markClean();
 }
 
 File OmniChainProcessor::getUserPresetFolder()
@@ -354,6 +357,7 @@ bool OmniChainProcessor::savePresetFile (const File& f)
     auto xml = state.createXml();
     if (xml == nullptr || ! xml->writeTo (f)) return false;
     currentPresetName = f.getFileNameWithoutExtension();
+    markClean();
     return true;
 }
 
@@ -373,6 +377,7 @@ bool OmniChainProcessor::loadPresetFile (const File& f)
     migrateOldState ((int) tree.getProperty ("formatVersion", 1));
     reloadResourcesFromState();
     currentPresetName = f.getFileNameWithoutExtension();
+    markClean();
     return true;
 }
 
@@ -571,6 +576,91 @@ void OmniChainProcessor::stopRecording()
         activeWriter = nullptr;
     }
     threadedWriter.reset();   // flushes and closes the file
+}
+
+// ------------------------------------------------------------------ patches
+double OmniChainProcessor::paramChecksum() const
+{
+    double sum = 0.0; int i = 0;
+    for (auto* prm : getParameters()) sum += (double) prm->getValue() * (1.0 + 0.6180339887 * (double) ++i);
+    for (int s = 0; s < oc::kNumSlots; ++s) sum += (double) apvts.state.getProperty ("res" + String (s + 1)).toString().hashCode() * 1.0e-9;
+    return sum;
+}
+
+File OmniChainProcessor::getSlotPatchRoot()
+{
+    auto f = getUserPresetFolder().getChildFile ("Effect Patches");
+    if (! f.exists()) f.createDirectory();
+    return f;
+}
+
+File OmniChainProcessor::getSlotPatchFolder (int type)
+{
+    return getSlotPatchRoot().getChildFile (File::createLegalFileName (oc::getInfo (type).name));
+}
+
+bool OmniChainProcessor::saveSlotPatch (int slot, const File& f)
+{
+    const int type = getSlotType (slot);
+    if (type == oc::FxNone) return false;
+    XmlElement x ("OmniChainSlot");
+    x.setAttribute ("formatVersion", kStateFormat);
+    x.setAttribute ("type", type);
+    x.setAttribute ("typeName", oc::getInfo (type).name);
+    for (int j = 1; j < kNumSlotParamIds; ++j) x.setAttribute (kSlotParamIds[j], (double) param (slot, kSlotParamIds[j])->getValue());
+    x.setAttribute ("res", getSlotFile (slot).getFullPathName());
+    f.getParentDirectory().createDirectory();
+    return x.writeTo (f);
+}
+
+bool OmniChainProcessor::loadSlotPatch (int slot, const File& f)
+{
+    auto x = XmlDocument::parse (f);
+    if (x == nullptr || ! x->hasTagName ("OmniChainSlot")) return false;
+    int type = x->getIntAttribute ("type", -1);
+    if (! isPositiveAndBelow (type, oc::NumEffectTypes) || x->getStringAttribute ("typeName") != oc::getInfo (type).name)
+    {
+        type = -1;                                          // the list grew: find the effect by its name instead
+        for (int t = 0; t < oc::NumEffectTypes; ++t) if (x->getStringAttribute ("typeName") == oc::getInfo (t).name) type = t;
+        if (type < 0) return false;
+    }
+    setSlotType (slot, type, true);
+    for (int j = 1; j < kNumSlotParamIds; ++j)
+        if (x->hasAttribute (kSlotParamIds[j])) setParamValue (param (slot, kSlotParamIds[j]), (float) x->getDoubleAttribute (kSlotParamIds[j]));
+    const auto res = x->getStringAttribute ("res");
+    if (oc::typeUsesResource (type) && res.isNotEmpty()) loadSlotFile (slot, resolveLibraryFile (File (res)));
+    return true;
+}
+
+// ------------------------------------------------------------------ window size
+static PropertiesFile& globalSettings()
+{
+    static std::unique_ptr<PropertiesFile> pf;
+    if (pf == nullptr)
+    {
+        PropertiesFile::Options o;
+        o.applicationName = "OmniChain"; o.filenameSuffix = ".settings"; o.folderName = "OmniChain";
+       #if JUCE_LINUX
+        o.folderName = ".config/OmniChain";
+       #endif
+        o.osxLibrarySubFolder = "Application Support"; o.millisecondsBeforeSaving = 500;
+        pf = std::make_unique<PropertiesFile> (o);
+    }
+    return *pf;
+}
+
+float OmniChainProcessor::getUiScale()
+{
+    const float def = (float) globalSettings().getDoubleValue ("uiScale", 1.0);
+    return jlimit (0.6f, 2.5f, (float) (double) apvts.state.getProperty ("uiScale", def));
+}
+
+void OmniChainProcessor::setUiScale (float s)
+{
+    s = jlimit (0.6f, 2.5f, s);
+    if (std::abs ((float) (double) apvts.state.getProperty ("uiScale", 0.0) - s) < 0.001f) return;
+    apvts.state.setProperty ("uiScale", s, nullptr);
+    globalSettings().setValue ("uiScale", s);
 }
 
 AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new OmniChainProcessor(); }

@@ -32,12 +32,28 @@ public:
 };
 } // namespace ocui
 
-class OmniChainEditor;
+class OmniChainPanel;
+
+// Buttons, timer and progress bar for a Looper slot
+class LooperPanel : public juce::Component, private juce::Timer
+{
+public:
+    LooperPanel (OmniChainProcessor& p, int slotIndex);
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void visibilityChanged() override { if (isVisible()) startTimerHz (20); else stopTimer(); }
+private:
+    void timerCallback() override;
+    OmniChainProcessor& proc;
+    const int slot;
+    juce::TextButton mainBtn { "Record" }, playBtn { "Play" }, undoBtn { "Undo" }, clearBtn { "Clear" };
+    int state = -1; float len = 0, pos = 0; int flags = 0;
+};
 
 class SlotCard : public juce::Component, public juce::DragAndDropTarget, public juce::FileDragAndDropTarget
 {
 public:
-    SlotCard (OmniChainProcessor&, OmniChainEditor&, int index);
+    SlotCard (OmniChainProcessor&, OmniChainPanel&, int index);
     ~SlotCard() override;
     void paint (juce::Graphics&) override;
     void paintOverChildren (juce::Graphics&) override;
@@ -57,7 +73,8 @@ public:
     void openFileChooser();
     void showLoadMenu();
     void addLibraryFolder (juce::PopupMenu&, const juce::File& dir, bool nam, const juce::File& current);
-    juce::Array<juce::File> libraryFiles;
+    juce::Array<juce::File> libraryFiles, slotPatchFiles;
+    void saveSlotPatch();
 
 private:
     void rebuildForType (int type);
@@ -66,7 +83,7 @@ private:
     juce::Rectangle<int> headerArea() const { return getLocalBounds().removeFromTop (34); }
 
     OmniChainProcessor& proc;
-    OmniChainEditor& editor;
+    OmniChainPanel& editor;
     const int index;
     int shownType = -1;
     float meter = 0;
@@ -78,6 +95,7 @@ private:
     ocui::Knob knobs[oc::kParamsPerSlot];
     juce::Slider mix, level;
     juce::Label mixLabel, levelLabel, blurb, fileLabel;
+    std::unique_ptr<juce::Component> looperPanel;
     juce::TextButton loadBtn { "Load" }, filePrev { "<" }, fileNext { ">" };
     std::unique_ptr<juce::FileChooser> chooser;
     juce::String shownFileText;
@@ -122,11 +140,12 @@ private:
     juce::Array<double> taps;
 };
 
-class OmniChainEditor : public juce::AudioProcessorEditor, public juce::DragAndDropContainer, private juce::Timer
+// Everything you see, laid out at a fixed design size; OmniChainEditor scales it to any window size.
+class OmniChainPanel : public juce::Component, public juce::DragAndDropContainer, public juce::FileDragAndDropTarget, private juce::Timer
 {
 public:
-    explicit OmniChainEditor (OmniChainProcessor&);
-    ~OmniChainEditor() override;
+    explicit OmniChainPanel (OmniChainProcessor&);
+    ~OmniChainPanel() override;
     void paint (juce::Graphics&) override;
     void resized() override;
 
@@ -134,14 +153,24 @@ private:
     void timerCallback() override;
     void rebuildPresetMenu();
     void stepPreset (int delta);
-    void savePreset();
-    void loadPreset();
+    void savePreset (bool askNewName = false);
+    void doSave (const juce::String& name);
+    void showMoreMenu();
+    void importPreset (const juce::File& f);
+    bool isUserPreset() const { return proc.userPresetFile (proc.currentPresetName).existsAsFile(); }
+public:
+    std::function<void (float)> onScaleChosen;
+    void showScale (float s);
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void filesDropped (const juce::StringArray& files, int, int) override;
+private:
 
     OmniChainProcessor& proc;
     ocui::LookAndFeel lnf;
     std::unique_ptr<SlotCard> cards[oc::kNumSlots];
     juce::ComboBox presetBox;
-    juce::TextButton prevBtn { "<" }, nextBtn { ">" }, saveBtn { "Save" }, loadBtn { "Load" };
+    juce::TextButton prevBtn { "<" }, nextBtn { ">" }, saveBtn { "Save" }, loadBtn { "More" };
+    juce::ComboBox sizeBox;
     ocui::Knob inKnob, mixKnob, outKnob;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> inAtt, mixAtt, outAtt;
     std::unique_ptr<juce::FileChooser> chooser;
@@ -152,5 +181,20 @@ private:
     std::unique_ptr<StandaloneBar> standaloneBar;
     TunerOverlay tunerOverlay { proc };
 
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OmniChainPanel)
+};
+
+// The plugin window: holds the panel and scales it (drag the corner, or pick a size in the header)
+class OmniChainEditor : public juce::AudioProcessorEditor
+{
+public:
+    explicit OmniChainEditor (OmniChainProcessor&);
+    void paint (juce::Graphics& g) override { g.fillAll (ocui::bg0); }
+    void resized() override;
+private:
+    OmniChainProcessor& proc;
+    OmniChainPanel panel;
+    int baseW = 1220, baseH = 790;
+    bool ready = false;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OmniChainEditor)
 };

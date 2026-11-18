@@ -1,6 +1,6 @@
 # OmniChain: modular multi-FX (VST3)
 
-An 8-slot effects chain where any slot can hold any of 60 built-in effects, plus a **Cab IR loader**
+An 8-slot effects chain where any slot can hold any of 63 built-in effects, plus a **Cab IR loader**
 and a **Neural Amp Modeler (NAM) loader** for free captures of real amps, pedals and cabinets. You can reorder the chain by dragging,
 and the plugin reports **0 samples of latency**. A full 8-slot chain uses about 1–2 % of one CPU core.
 
@@ -73,6 +73,30 @@ cp -r OmniChain.vst3 ~/.vst3/ && cp -r OmniChain.lv2 ~/.lv2/ && cp OmniChain.cla
 
 The standalone app (`OmniChain.exe` / `OmniChain.app` / `OmniChain`) lets you plug your guitar interface in and play with no DAW needed.
 Set the audio device under *Options → Audio/MIDI settings*.
+
+## New in 2.1
+
+* **Resizable window** in every DAW and in the app: drag the bottom-right corner, or pick **Size** (75–200%) in the header.
+  OmniChain remembers the size for that project and as the default for new windows.
+* **Prism Shifter** (inspired by the Rainbow Machine): polyphonic pitch shifting (play chords), a second voice,
+  and **Magic** feedback that sends the shifted sound back through itself for cascading, rising tones. *Swoop* mode
+  slides every note up to the interval as you pick.
+* **Dream Loop** (inspired by the MOOD MKII): a wet channel (Reverb, Delay or Slip) plus an always-listening micro-looper.
+  It keeps replaying your last 0.25–8 seconds, in *Env* (follows your playing), *Tape* (speed and reverse) or
+  *Stretch* (slower or faster without changing pitch). **Capture: Hold** freezes the loop, and **Clock** makes it gritty and lo-fi.
+* **Microverse** (inspired by the Microcosm): ten tempo-locked algorithms (Mosaic, Glide, Haze, Tunnel, Strum, Blocks,
+  Interrupt, Arp, Pattern, Warp) with four variations each, plus Activity, Shape, Repeats, Filter and Space.
+* **Easier patches:**
+  * **Save** asks for a name and saves straight into the preset list. Changed presets show **(edited)**.
+  * **More** lets you rename, delete, revert, import or export.
+  * Drag a `.ocpreset` file onto the window to import it.
+* **Effect patches:** right-click any slot header and choose **Save effect patch** to keep just that effect's settings.
+  **Load effect patch** puts them in any slot. You can also drop `.ocslot` files onto a slot.
+* **New Looper:** Record / Close loop / Overdub on one big button, plus Play/Stop, **Undo/Redo** and Clear, with a timer and
+  progress bar. **Start: On first note** waits until you play. To use a single MIDI footswitch, link it to the **Footswitch**
+  knob: press cycles record, play and overdub; double-tap stops; hold 1 s undoes.
+* **Cleaner pitch shifting:** the shared pitch engine now aligns its grains (SOLA), which removes the warble. This improves
+  Pitch Shifter, Harmonic Arp, Spiral Delay, Hyper Unison, Amp Feedback and the reverb shimmer. Measured warble sidebands dropped to about -46 to -50 dB.
 
 ## Factory library (new in 2.0)
 
@@ -194,6 +218,7 @@ expression pedal. Any other knob can be linked the same way, for example Freeze 
 | New in 1.3 | **Tap Ensemble** (8-tap Holdsworth-style chorus), **Guitar Synth** (pitch-tracking synth), **Barber Pole**, **Radio Tuner**, **Orbit**, **Melt**, **Chaos Echo** |
 | New in 2.0: compressors | **FET 76** (with All-In mode), **Opto Leveler**, **Bus Compressor**, **Pedal Compressor**, **Tube Vari-Mu**, **Multiband** (3 bands, phase-aligned) |
 | New in 2.0: effects | **Looper** (45 s, overdub, half/double speed, reverse, bar-synced), **Frequency Shifter**, **Wavefolder**, **Hyper Unison**, **Glass Bells**, **Vinyl**, **Underwater**, **Exciter**, **Doubler**, **Acoustic Simulator** |
+| New in 2.1 | **Prism Shifter**, **Dream Loop**, **Microverse**, plus the redesigned **Looper** |
 | Loaders | **NAM Capture** (Neural Amp Modeler `.nam`), **Cab IR Loader** (`.wav/.aif/.flac`, zero-latency partitioned convolution) |
 
 ### About "zero latency"

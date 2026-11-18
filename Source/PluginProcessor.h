@@ -46,6 +46,21 @@ public:
     bool savePresetFile (const juce::File& f);
     static juce::File getUserPresetFolder();
 
+    // ---- easy patch management ----
+    juce::File userPresetFile (const juce::String& name) const { return getUserPresetFolder().getChildFile (juce::File::createLegalFileName (name.trim()) + ".ocpreset"); }
+    bool saveUserPreset (const juce::String& name) { return savePresetFile (userPresetFile (name)); }
+    double paramChecksum() const;
+    void markClean() { cleanChecksum = paramChecksum(); }
+    bool isModified() const { return std::abs (paramChecksum() - cleanChecksum) > 1.0e-6; }
+    // single-effect patches (one slot's effect + settings + file), sorted into a folder per effect
+    static juce::File getSlotPatchRoot();
+    static juce::File getSlotPatchFolder (int type);
+    bool saveSlotPatch (int slot, const juce::File& f);
+    bool loadSlotPatch (int slot, const juce::File& f);
+    // window size (saved with the project, and remembered as the default for new windows)
+    float getUiScale();
+    void setUiScale (float s);
+
     // ---- file-based slots (Cab IR / NAM) ----
     static bool isIrFile (const juce::File& f)  { return f.hasFileExtension ("wav;aif;aiff;flac"); }
     static bool isNamFile (const juce::File& f) { return f.hasFileExtension ("nam"); }
@@ -75,6 +90,7 @@ public:
     juce::AudioProcessorValueTreeState apvts;
     oc::Engine engine;
     juce::String currentPresetName { "Init (empty chain)" };
+    double cleanChecksum = 0.0;
 
 private:
     void timerCallback() override { engine.service(); }

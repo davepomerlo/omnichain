@@ -150,6 +150,7 @@ void Engine::swapRuntime (Slot& a, Slot& b)
     for (int k = 0; k < kParamsPerSlot; ++k) std::swap (a.frozen[k], b.frozen[k]);
     std::swap (a.wasIdle, b.wasIdle); std::swap (a.snap, b.snap);
     const float m = a.meter.load(); a.meter.store (b.meter.load()); b.meter.store (m);
+    for (int k = 0; k < 4; ++k) { const float t = a.status[k].load(); a.status[k].store (b.status[k].load()); b.status[k].store (t); }
 }
 
 void Engine::applyMove (int from, int to)
@@ -225,6 +226,8 @@ void Engine::processChunk (float* L, float* R, int n, const Context& ctx)
         s.mix.tgt = rf.mix ? clampf (rf.mix->load (std::memory_order_relaxed) * 0.01f, 0.0f, 1.0f) : 1.0f;
         s.lvl.tgt = rf.level ? dbToGain (rf.level->load (std::memory_order_relaxed)) : 1.0f;
 
+        if (const int c = s.cmd.exchange (0, std::memory_order_acq_rel)) fx->command (c);
+        for (int k = 0; k < 4; ++k) s.status[k].store (fx->status[k], std::memory_order_relaxed);
         if (fx->type == FxNone) { s.fade = fadeTgt; s.byp = bypTgt; s.meter.store (0.0f, std::memory_order_relaxed); continue; }
 
         const bool idle = (s.fade <= 0.0f && fadeTgt <= 0.0f) || (s.byp >= 1.0f && bypassed);
@@ -274,6 +277,7 @@ void Engine::processChunk (float* L, float* R, int n, const Context& ctx)
             R[i] += m * (wr[i] * lv - R[i]);
         }
         s.meter.store (fx->meter, std::memory_order_relaxed);
+        for (int k = 0; k < 4; ++k) s.status[k].store (fx->status[k], std::memory_order_relaxed);
     }
 
     // global mix + output gain

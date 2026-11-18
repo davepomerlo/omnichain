@@ -2441,56 +2441,143 @@ struct MultibandFx final : Effect   // 3 bands, Linkwitz-Riley crossovers (flat 
 // =====================================================================================
 struct LooperFx final : Effect
 {
-    std::vector<float> buf[2]; int maxLen = 0, len = 0, lastKnob = 0; double pos = 0; bool rec = false, have = false;
+    // states shown in status[0]
+    enum { Empty = 0, Armed, Recording, Playing, Overdubbing, Stopped };
+    // commands from the UI
+    enum { CmdPress = 1, CmdStop, CmdPlay, CmdUndo, CmdClear, CmdRec, CmdDub };
+    std::vector<float> buf[2], undo[2]; std::vector<uint16_t> stamp;
+    int maxLen = 0, len = 0, state = Empty, lastMode = 0, lastPedal = 0, undoPos = -1;
+    uint16_t curStamp = 1; bool hasUndo = false, undoneState = false;
+    double pos = 0; int64_t clock = 0, pedalDownAt = -1, lastPressAt = -1000000;
+    EnvFollower env;
     void prepare (double s, int b) override
     {
         Effect::prepare (s, b);
         maxLen = int (45.0 * sr);
-        buf[0].assign ((size_t) maxLen + 4, 0.0f); buf[1].assign ((size_t) maxLen + 4, 0.0f);
-        len = 0; pos = 0; rec = false; have = false; lastKnob = 0;
+        for (int c = 0; c < 2; ++c) { buf[c].assign ((size_t) maxLen + 4, 0.0f); undo[c].assign ((size_t) maxLen + 4, 0.0f); }
+        stamp.assign ((size_t) maxLen + 4, 0);
+        env.setup (0.5f, 50.0f, sr);
+        len = 0; pos = 0; state = Empty; hasUndo = false; undoPos = -1;
     }
-    void finishRecording()
+    void reset() override {}     // keep the loop when the slot is bypassed
+    void startRecording() { len = 0; pos = 0; state = Recording; hasUndo = false; undoPos = -1; ++curStamp; }
+    void closeLoop (bool thenDub)
     {
-        rec = false; have = len > int (0.05 * sr); pos = 0;
-        if (! have) return;
-        const int f = std::min (len / 4, int (0.006 * sr));
+        if (len < int (0.05 * sr)) { state = Empty; len = 0; return; }
+        const int f = std::min (len / 4, int (0.006 * sr));       // short fades so the loop point never clicks
         for (int c = 0; c < 2; ++c)
-            for (int i = 0; i < f; ++i) { const float w = float (i) / float (f); buf[c][(size_t) i] *= w; buf[c][(size_t) (len - 1 - i)] *= w; }
+            for (int i = 0; i < f; ++i)
+            {
+                const float w = float (i) / float (f);
+                buf[c][(size_t) i] *= w; buf[c][(size_t) (len - 1 - i)] *= w;
+                undo[c][(size_t) i] = buf[c][(size_t) i]; undo[c][(size_t) (len - 1 - i)] = buf[c][(size_t) (len - 1 - i)];
+            }
+        pos = 0; state = thenDub ? Overdubbing : Playing;
+        if (thenDub) ++curStamp;
+    }
+    void startDub() { ++curStamp; hasUndo = true; undoneState = false; state = Overdubbing; }
+    void press (int64_t now)
+    {
+        // a second press within 0.45 s = stop (like most looper pedals)
+        if (now - lastPressAt < (int64_t) (0.45 * sr) && (state == Playing || state == Overdubbing))
+        {
+            state = Stopped; lastPressAt = -1000000; return;
+        }
+        lastPressAt = now;
+        switch (state)
+        {
+            case Empty:       state = Armed; break;
+            case Armed:       startRecording(); break;
+            case Recording:   closeLoop (false); break;
+            case Playing:     startDub(); break;
+            case Overdubbing: state = Playing; break;
+            case Stopped:     pos = 0; state = Playing; break;
+            default: break;
+        }
+    }
+    void command (int c) override
+    {
+        switch (c)
+        {
+            case CmdPress: press (clock); break;
+            case 8:        lastPressAt = -1000000; press (clock); lastPressAt = -1000000; break;   // on-screen button: never double-taps
+            case CmdStop:  if (state == Recording) closeLoop (false); if (state == Armed) state = Empty; else if (len > 0) state = Stopped; break;
+            case CmdPlay:  if (state == Recording) closeLoop (false); else if (len > 0) { if (state == Stopped) pos = 0; state = Playing; } break;
+            case CmdUndo:  if (hasUndo && undoPos < 0 && state != Recording) { if (state == Overdubbing) state = Playing; undoPos = 0; } break;
+            case CmdClear: state = Empty; len = 0; pos = 0; hasUndo = false; undoPos = -1; break;
+            case CmdRec:   if (state == Recording) closeLoop (false); else if (state == Empty || state == Stopped) state = Armed; else if (state == Armed) startRecording(); break;
+            case CmdDub:   if (state == Recording) closeLoop (true); else if (state == Overdubbing) state = Playing; else if (len > 0) { if (state == Stopped) pos = 0; startDub(); } break;
+            default: break;
+        }
     }
     void process (float* L, float* R, int n, const float* v, const Context& ctx) override
     {
         static const float bars[5] = { 0, 1, 2, 4, 8 };
-        const int knob = (int) v[0];
-        const float level = v[1] * 0.01f, decay = v[2] * 0.01f;
+        // Mode knob (for automation / old presets): acts as a command when it changes
+        const int mode = (int) v[0];
+        if (mode != lastMode)
+        {
+            if (mode == 0) command (CmdStop);
+            else if (mode == 1) { if (state != Recording) startRecording(); }
+            else if (mode == 2) command (CmdPlay);
+            else command (CmdDub);
+            lastMode = mode;
+        }
+        // Footswitch knob (link it to a MIDI pedal): each change Up->Down is a press; holding 1 s = undo
+        const int pedal = (int) v[6];
+        if (pedal != lastPedal)
+        {
+            if (pedal == 1) { pedalDownAt = clock; press (clock); }
+            else if (pedalDownAt >= 0 && clock - pedalDownAt > (int64_t) sr) { if (state == Overdubbing) state = Playing; command (CmdUndo); }
+            lastPedal = pedal;
+        }
+        const float level = v[1] * 0.01f, keep = v[2] * 0.01f;
         const double speed = ((int) v[3] == 0 ? 0.5 : ((int) v[3] == 2 ? 2.0 : 1.0)) * ((int) v[4] == 1 ? -1.0 : 1.0);
         const int barLen = (int) std::min<double> (maxLen, bars[std::max (0, std::min (4, (int) v[5]))] * 4.0 * 60.0 / std::max (20.0, ctx.bpm) * sr);
-        if (knob != lastKnob)
+        const bool firstNote = (int) v[7] == 1;
+
+        // undo / redo runs in slices so it never spikes the CPU
+        if (undoPos >= 0)
         {
-            if (knob == 1) { len = 0; pos = 0; rec = true; have = false; }
-            else if (rec) finishRecording();
-            if (knob == 0) pos = 0;
-            lastKnob = knob;
+            const int end = std::min (len, undoPos + 32768);
+            for (int i = undoPos; i < end; ++i)
+                if (stamp[(size_t) i] == curStamp) for (int c = 0; c < 2; ++c) std::swap (buf[c][(size_t) i], undo[c][(size_t) i]);
+            undoPos = end >= len ? -1 : end;
+            if (undoPos < 0) undoneState = ! undoneState;
         }
-        for (int i = 0; i < n; ++i)
+        for (int i = 0; i < n; ++i, ++clock)
         {
             const float inL = L[i], inR = R[i];
-            if (rec)
+            const float e = env.tick (std::max (std::fabs (inL), std::fabs (inR)));
+            if (state == Armed && (! firstNote || e > 0.012f)) startRecording();
+            if (state == Recording)
             {
-                buf[0][(size_t) len] = inL; buf[1][(size_t) len] = inR;
-                if (++len >= maxLen || (barLen > 0 && len >= barLen)) finishRecording();   // loop closes itself after the set number of bars
+                buf[0][(size_t) len] = undo[0][(size_t) len] = inL;
+                buf[1][(size_t) len] = undo[1][(size_t) len] = inR;
+                stamp[(size_t) len] = 0;
+                if (++len >= maxLen || (barLen > 0 && len >= barLen)) closeLoop (false);
                 continue;
             }
-            if (! have || knob == 0) continue;
-            const int i0 = (int) pos; const float fr = float (pos - i0);
+            if ((state != Playing && state != Overdubbing) || len <= 0) continue;
+            const int i0 = std::min ((int) pos, len - 1); const float fr = float (pos - std::floor (pos));
             const int i1 = i0 + 1 >= len ? 0 : i0 + 1;
             const float yl = buf[0][(size_t) i0] + fr * (buf[0][(size_t) i1] - buf[0][(size_t) i0]);
             const float yr = buf[1][(size_t) i0] + fr * (buf[1][(size_t) i1] - buf[1][(size_t) i0]);
-            if (knob == 3) { buf[0][(size_t) i0] = buf[0][(size_t) i0] * decay + inL; buf[1][(size_t) i0] = buf[1][(size_t) i0] * decay + inR; }
+            if (state == Overdubbing && undoPos < 0)
+            {
+                if (stamp[(size_t) i0] != curStamp) { stamp[(size_t) i0] = curStamp; undo[0][(size_t) i0] = buf[0][(size_t) i0]; undo[1][(size_t) i0] = buf[1][(size_t) i0]; }
+                buf[0][(size_t) i0] = buf[0][(size_t) i0] * keep + inL;
+                buf[1][(size_t) i0] = buf[1][(size_t) i0] * keep + inR;
+            }
             L[i] = inL + yl * level; R[i] = inR + yr * level;
             pos += speed;
             if (pos >= len) pos -= len; else if (pos < 0) pos += len;
         }
-        meter = rec ? float (len) / float (maxLen) : (have && len > 0 ? float (pos / len) : 0.0f);
+        status[0] = (float) state;
+        status[1] = (float) (len / sr);
+        status[2] = state == Recording ? (barLen > 0 ? float (len) / float (barLen) : 0.0f) : (len > 0 ? float (pos / len) : 0.0f);
+        status[3] = (hasUndo ? 1.0f : 0.0f) + (undoneState ? 2.0f : 0.0f);
+        meter = state == Recording || state == Overdubbing ? 1.0f : (state == Playing ? 0.5f : 0.0f);
     }
 };
 
@@ -2839,6 +2926,334 @@ struct AcousticFx final : Effect
     }
 };
 
+// =====================================================================================
+// v2.1: Prism Shifter, Dream Loop, Microverse
+// =====================================================================================
+struct PrismFx final : Effect      // polyphonic pitch shifting with regenerating feedback
+{
+    GrainShifter sh1[2], sh2[2]; OnePole tone[2], fbTone[2]; float fb[2] = { 0, 0 };
+    EnvFollower fast, slow; float cur = 0, swoop = 1; int refr = 0; Smooth win;
+    void prepare (double s, int b) override
+    {
+        Effect::prepare (s, b);
+        for (int c = 0; c < 2; ++c) { sh1[c].init (int (0.1 * sr)); sh2[c].init (int (0.1 * sr)); fbTone[c].setHz (5000.0f, sr); }
+        fast.setup (0.5f, 30.0f, sr); slow.setup (30.0f, 300.0f, sr);
+        win.setTime (40.0f, sr); win.reset (0.04f * float (sr));
+        reset();
+    }
+    void reset() override { for (int c = 0; c < 2; ++c) { sh1[c].clear(); sh2[c].clear(); tone[c].reset(); fbTone[c].reset(); fb[c] = 0; } fast.reset(); slow.reset(); swoop = 1; }
+    static float quantize (float st, int mode)
+    {
+        if (mode == 1) return std::round (st);
+        if (mode == 2)
+        {
+            static const float q[] = { -12, -7, -5, 0, 5, 7, 12 };
+            float best = 0; for (float x : q) if (std::fabs (x - st) < std::fabs (best - st)) best = x;
+            return best;
+        }
+        return st;
+    }
+    void process (float* L, float* R, int n, const float* v, const Context&) override
+    {
+        static const float sec[11] = { 0, -12, -7, -5, 3, 4, 5, 7, 12, 24, 0.12f };
+        const int mode = std::max (0, std::min (3, (int) v[1])), si = std::max (0, std::min (10, (int) v[2]));
+        const float target = quantize (v[0], mode);
+        const float p1 = v[3] * 0.01f, p2 = si == 0 ? 0.0f : v[4] * 0.01f, magic = v[5] * 0.01f;
+        win.tgt = lerp (0.012f, 0.09f, v[6] * 0.01f) * float (sr);       // low Tracking = glitchy, chirpy artefacts
+        tone[0].setHz (v[7], sr); tone[1].a = tone[0].a;
+        const float kGlide = 1.0f - std::exp (-1.0f / ((mode == 0 ? 0.03f : 0.004f) * float (sr)));
+        const float kSwoop = 1.0f - std::exp (-1.0f / (0.25f * float (sr)));
+        for (int i = 0; i < n; ++i)
+        {
+            const float m = std::max (std::fabs (L[i]), std::fabs (R[i])) + 1.0e-7f;
+            const float fd = gainToDb (fast.tick (m)), sd = gainToDb (slow.tick (m));
+            if (refr > 0) --refr;
+            if (mode == 3 && fd - sd > 9.0f && fd > -55.0f && refr == 0) { swoop = 0.0f; refr = int (0.08 * sr); }   // every pick swoops up to the interval
+            swoop += (1.0f - swoop) * kSwoop;
+            cur += ((mode == 3 ? std::round (target) * swoop : target) - cur) * kGlide;
+            const float r1 = std::exp2 (cur / 12.0f), r2 = std::exp2 ((cur + sec[si]) / 12.0f);
+            const float w = win.next();
+            float* ch[2] = { L, R };
+            for (int c = 0; c < 2; ++c)
+            {
+                const float x = ch[c][i];
+                const float y1 = sh1[c].tick (x + magic * fb[c], r1, w * (c ? 1.07f : 1.0f));
+                const float y2 = p2 > 0.0f ? sh2[c].tick (x, r2, w * (c ? 0.93f : 1.0f)) : 0.0f;
+                fb[c] = fbTone[c].lp (fastTanh (y1 * 1.2f)) * 0.95f;     // each pass shifts again: cascading, rising tones
+                ch[c][i] = tone[c].lp (x * 0.8f + y1 * p1 + y2 * p2);
+            }
+        }
+        meter = clampf (magic, 0, 1);
+    }
+};
+
+struct DreamFx final : Effect      // wet channel (reverb / delay / slip) + always-listening micro-looper + clock
+{
+    ReverbFx verb; DelayLine dl[2]; GrainShifter slip[2]; OnePole dTone[2], lpOut[2];
+    std::vector<float> lbuf[2]; int lmask = 0; int64_t w = 0, base = 0; double lp = 0; float stretchPos = 0, g[2] = { 0, 0.5f }, gs[2] = { 0, 0 };
+    EnvFollower env; float envG = 1, held[2] = { 0, 0 }, clk = 0; Smooth dTime;
+    std::vector<float> wl, wr;
+    void prepare (double s, int b) override
+    {
+        Effect::prepare (s, b);
+        verb.prepare (s, b);
+        for (int c = 0; c < 2; ++c) { dl[c].init (int (1.6 * sr)); slip[c].init (int (0.12 * sr)); dTone[c].setHz (4500.0f, sr); }
+        int sz = 1; while (sz < int (18.0 * sr)) sz <<= 1;
+        lbuf[0].assign ((size_t) sz, 0.0f); lbuf[1].assign ((size_t) sz, 0.0f); lmask = sz - 1;
+        env.setup (2.0f, 120.0f, sr);
+        dTime.setTime (150.0f, sr); dTime.reset (0.4f * float (sr));
+        wl.assign ((size_t) b, 0.0f); wr.assign ((size_t) b, 0.0f);
+        reset();
+    }
+    void reset() override
+    {
+        verb.reset(); for (int c = 0; c < 2; ++c) { dl[c].clear(); slip[c].clear(); dTone[c].reset(); lpOut[c].reset(); }
+        std::fill (lbuf[0].begin(), lbuf[0].end(), 0.0f); std::fill (lbuf[1].begin(), lbuf[1].end(), 0.0f);
+        w = 0; base = 0; lp = 0; stretchPos = 0;
+    }
+    inline float rd (int c, double idx) const
+    {
+        const double f = std::floor (idx); const int64_t i = (int64_t) f; const float t = float (idx - f);
+        const float a = lbuf[c][(size_t) (i & lmask)], b = lbuf[c][(size_t) ((i + 1) & lmask)];
+        return a + t * (b - a);
+    }
+    void process (float* L, float* R, int n, const float* v, const Context& ctx) override
+    {
+        static const float tapeSp[7] = { -2.0f, -1.0f, -0.5f, 0.5f, 1.0f, 1.5f, 2.0f };
+        const int wetMode = std::max (0, std::min (2, (int) v[0])), loopMode = std::max (0, std::min (3, (int) v[3]));
+        const float time = v[1] * 0.01f, mod = v[2] * 0.01f, lmod = v[5] * 0.01f;
+        const bool hold = (int) v[7] == 1;
+        const int64_t Ls = std::max<int64_t> (256, (int64_t) (v[4] * sr));
+        if (n > (int) wl.size()) return;
+        // ---- wet channel
+        std::copy (L, L + n, wl.begin()); std::copy (R, R + n, wr.begin());
+        if (wetMode == 0)
+        {
+            const float rv[8] = { 30.0f + time * 70.0f, 0.4f + time * time * 9.0f, 20.0f + (1.0f - mod) * 60.0f, 10.0f, mod * 100.0f, 0.0f, 120.0f, 120.0f };
+            verb.process (wl.data(), wr.data(), n, rv, ctx);
+        }
+        else
+        {
+            dTime.tgt = (0.04f * std::pow (30.0f, time)) * float (sr);
+            const float fbk = wetMode == 1 ? mod * 0.95f : 0.62f;
+            const float ratio = std::exp2 ((mod - 0.5f) * 2.0f);        // Slip: each repeat drifts up or down in pitch
+            for (int i = 0; i < n; ++i)
+            {
+                const float d = dTime.next();
+                for (int c = 0; c < 2; ++c)
+                {
+                    float* x = c ? wr.data() : wl.data();
+                    float y = dl[c].read (std::max (2.0f, d * (c ? 1.03f : 1.0f)));
+                    if (wetMode == 2) y = slip[c].tick (y, ratio, 0.06f * float (sr));
+                    dl[c].push (x[i] + fbk * fastTanh (dTone[c].lp (y)));
+                    x[i] = y;
+                }
+            }
+        }
+        // ---- loop channel
+        const float kEnv = 1.0f - onePoleCoef (25.0f, sr);
+        const double sp = loopMode == 2 ? (double) lerp (tapeSp[(int) std::min (5.0f, lmod * 6.0f)], tapeSp[(int) std::min (6.0f, lmod * 6.0f + 1.0f)], lmod * 6.0f - std::floor (lmod * 6.0f))
+                                        : 1.0;
+        const float stretch = std::exp2 ((lmod - 0.5f) * 4.0f);
+        const float G = float (0.09 * sr), fade = float (0.01 * sr);
+        const float cstep = v[6] >= 99.5f ? 1.0f : float (std::min (1.0, (1500.0 * std::pow (30.0, v[6] * 0.01)) / sr));
+        for (int i = 0; i < n; ++i)
+        {
+            if (! hold) { lbuf[0][(size_t) (w & lmask)] = L[i]; lbuf[1][(size_t) (w & lmask)] = R[i]; }
+            ++w;
+            float ol = 0, orr = 0;
+            if (loopMode > 0)
+            {
+                const double Ld = (double) Ls;
+                bool wrapped = false;
+                if (loopMode == 3)
+                {
+                    stretchPos += stretch;
+                    if (stretchPos >= Ld) { stretchPos -= (float) Ld; wrapped = true; }
+                    for (int k = 0; k < 2; ++k)
+                    {
+                        g[k] += 1.0f / G;
+                        if (g[k] >= 1.0f) { g[k] -= 1.0f; gs[k] = stretchPos; }
+                        const float hw = 0.5f - 0.5f * std::cos (k2Pi * g[k]);
+                        const double idx = (double) base + std::fmod ((double) gs[k] + g[k] * G, Ld);
+                        ol += rd (0, idx) * hw; orr += rd (1, idx) * hw;
+                    }
+                }
+                else
+                {
+                    lp += sp;
+                    if (lp >= Ld) { lp -= Ld; wrapped = true; } else if (lp < 0) { lp += Ld; wrapped = true; }
+                    const double idx = (double) base + lp;
+                    const float fw = std::min (1.0f, std::min ((float) lp, (float) (Ld - lp)) / fade);
+                    ol = rd (0, idx) * fw; orr = rd (1, idx) * fw;
+                }
+                if (wrapped && ! hold) base = w - Ls;            // Listen: each pass replays the latest Length seconds
+                if (loopMode == 1)
+                {
+                    const float e = clampf (env.tick (std::max (std::fabs (L[i]), std::fabs (R[i]))) * 12.0f, 0.0f, 1.0f);
+                    envG += (lerp (1.0f, e, lmod) - envG) * kEnv;     // Env: the loop swells with your playing
+                    ol *= envG; orr *= envG;
+                }
+            }
+            float yl = wl[(size_t) i] + ol * 0.9f, yr = wr[(size_t) i] + orr * 0.9f;
+            if (cstep < 1.0f)                                      // Clock: lower sample rate, gritty and dark
+            {
+                clk += cstep;
+                if (clk >= 1.0f) { clk -= 1.0f; held[0] = yl; held[1] = yr; }
+                yl = held[0]; yr = held[1];
+                lpOut[0].setHz (float (sr) * cstep * 0.45f, sr); lpOut[1].a = lpOut[0].a;
+                yl = lpOut[0].lp (yl); yr = lpOut[1].lp (yr);
+            }
+            L[i] = yl; R[i] = yr;
+        }
+        status[0] = hold ? 1.0f : 0.0f;
+        meter = loopMode > 0 ? 0.5f + 0.5f * (hold ? 1.0f : 0.0f) : 0.0f;
+    }
+};
+
+struct MicroverseFx final : Effect // granular / glitch / multi-delay algorithms around one shared buffer
+{
+    enum { Mosaic, Glide, Haze, Tunnel, Strum, Blocks, Interrupt, Arp, Pattern, Warp };
+    struct Grain { bool on = false; double pos = 0; float rate = 1, rateEnd = 1; int len = 1, t = 0, delay = 0; float gl = 1, gr = 1, amp = 1; };
+    static constexpr int NG = 24;
+    std::vector<float> buf[2]; int mask = 0; int64_t w = 0; Grain gv[NG]; Rng rng { 777u };
+    StepClock clk; int64_t lastStep = -1; float spawnAcc = 0; int64_t anchor = 0; int arpIdx = 0;
+    EnvFollower fast, slow; int refr = 0; float last[2] = { 0, 0 }; Svf filt[2]; ReverbFx verb; std::vector<float> vl, vr;
+    float wph = 0;
+    void prepare (double s, int b) override
+    {
+        Effect::prepare (s, b);
+        int sz = 1; while (sz < int (10.0 * sr)) sz <<= 1;
+        buf[0].assign ((size_t) sz, 0.0f); buf[1].assign ((size_t) sz, 0.0f); mask = sz - 1;
+        fast.setup (0.5f, 30.0f, sr); slow.setup (30.0f, 300.0f, sr);
+        verb.prepare (s, b); vl.assign ((size_t) b, 0.0f); vr.assign ((size_t) b, 0.0f);
+        reset();
+    }
+    void reset() override
+    {
+        std::fill (buf[0].begin(), buf[0].end(), 0.0f); std::fill (buf[1].begin(), buf[1].end(), 0.0f);
+        for (auto& g : gv) g.on = false;
+        w = 0; lastStep = -1; last[0] = last[1] = 0; filt[0].reset(); filt[1].reset(); verb.reset();
+    }
+    inline float rd (int c, double idx) const
+    {
+        const double f = std::floor (idx); const int64_t i = (int64_t) f; const float t = float (idx - f);
+        return buf[c][(size_t) (i & mask)] + t * (buf[c][(size_t) ((i + 1) & mask)] - buf[c][(size_t) (i & mask)]);
+    }
+    void spawn (double back, int len, float rate, float rateEnd, float amp, int delay = 0)
+    {
+        for (auto& g : gv)
+            if (! g.on)
+            {
+                back = std::min (back, double (mask) - std::fabs (rate) * len - 64.0);
+                g.on = true; g.t = 0; g.len = std::max (64, len); g.delay = delay;
+                g.pos = double (w) - back + (rate < 0 ? -rate * len : 0.0);
+                g.rate = rate; g.rateEnd = rateEnd; g.amp = amp;
+                const float pan = 0.5f + 0.45f * rng.bi();
+                g.gl = std::sqrt (1.0f - pan) * 1.41f; g.gr = std::sqrt (pan) * 1.41f;
+                return;
+            }
+    }
+    float pick (const float* set, int n) { return set[rng.next() % (uint32_t) n]; }
+    void process (float* L, float* R, int n, const float* v, const Context& ctx) override
+    {
+        static const float timeBeats[6] = { 4.0f, 2.0f, 1.0f, 0.5f, 1.0f / 3.0f, 0.25f };
+        static const float mosaicR[4][3] = { { 1, 2, 1 }, { 1, 0.5f, 1 }, { 2, 4, 2 }, { 1, 2, -1 } };
+        static const float chords[4][4] = { { 1, 1.26f, 1.5f, 2 }, { 1, 1.19f, 1.5f, 2 }, { 1, 1.5f, 2, 3 }, { 2, 1.5f, 1.26f, 1 } };
+        static const float arps[4][6] = { { 1, 1.26f, 1.5f, 2, 1.5f, 1.26f }, { 1, 1.19f, 1.5f, 2, 1.5f, 1.19f }, { 1, 1.5f, 2, 3, 2, 1.5f }, { 0.5f, 1, 1.5f, 2, 3, 4 } };
+        static const float patt[4][4] = { { 1, 2, 3, 4 }, { 0.75f, 1.5f, 2.25f, 3 }, { 1, 1.5f, 2.5f, 3 }, { 0.5f, 1.25f, 2, 3.25f } };
+        const int algo = std::max (0, std::min (9, (int) v[0])), var = std::max (0, std::min (3, (int) v[1]));
+        const double beats = timeBeats[std::max (0, std::min (5, (int) v[2]))];
+        const float act = v[3] * 0.01f, shape = v[4] * 0.01f, rep = v[5] * 0.01f, flt = v[6] * 0.01f, space = v[7] * 0.01f;
+        const double bpm = std::max (20.0, ctx.bpm);
+        const int step = (int) std::min<double> (beats * 60.0 / bpm * sr, mask / 4);
+        if (n > (int) vl.size()) return;
+        // filter: left = low-pass, right = high-pass
+        const float fc = flt < 0 ? 20000.0f * std::pow (0.02f, -flt) : 20.0f * std::pow (150.0f, flt);
+        for (int c = 0; c < 2; ++c) filt[c].set (fc, 0.8f, sr);
+        const float attack = 0.01f + 0.6f * std::pow (shape, 1.5f), decayPow = 1.0f + (1.0f - shape) * 2.5f;
+        for (int i = 0; i < n; ++i)
+        {
+            const float inL = L[i], inR = R[i];
+            buf[0][(size_t) (w & mask)] = inL + rep * last[0];
+            buf[1][(size_t) (w & mask)] = inR + rep * last[1];
+            ++w;
+            const float m = std::max (std::fabs (inL), std::fabs (inR)) + 1.0e-7f;
+            const float fd = gainToDb (fast.tick (m)), sd = gainToDb (slow.tick (m));
+            if (refr > 0) --refr;
+            const bool onset = fd - sd > 8.0f && fd > -50.0f && refr == 0;
+            if (onset) { refr = int (0.1 * sr); anchor = w; }
+            const int64_t st = clk.step (ctx, i, beats, sr);
+            const bool tick = st != lastStep; lastStep = st;
+            float yl = 0, yr = 0;
+            switch (algo)
+            {
+                case Mosaic: if (tick) { const int k = 1 + (int) (act * 2.99f); for (int j = 0; j < k; ++j) { const float r = pick (mosaicR[var], 3); spawn (step * (1 + rng.next() % 4), step * (1 + (int) (rng.uni() * 1.5f)), r, r, 0.8f); } } break;
+                case Glide:  if (tick) { static const float ge[4][2] = { { 1, 2 }, { 1, 0.5f }, { 0.5f, 2 }, { 2, 0.5f } }; float a = ge[var][0], b = ge[var][1]; if (var == 3 && rng.uni() < 0.5f) std::swap (a, b); spawn (step * 2, step * 2, a, b, 0.8f); } break;
+                case Haze:
+                {
+                    spawnAcc += (8.0f + act * 52.0f) / float (sr);
+                    if (spawnAcc >= 1.0f) { spawnAcc -= 1.0f; static const float hr[4][2] = { { 1, 1 }, { 1, 2 }, { 0.5f, 1 }, { 0.99f, 1.01f } }; const float r = var == 3 ? lerp (0.988f, 1.012f, rng.uni()) : pick (hr[var], 2); spawn (rng.uni() * 1.5 * sr + 256, int ((0.04f + 0.14f * rng.uni()) * sr), r, r, 1.1f); }
+                    break;
+                }
+                case Tunnel:
+                {
+                    spawnAcc += (3.0f + act * 9.0f) / float (sr);
+                    if (w - anchor > (int64_t) (step * 8)) anchor = w;
+                    if (spawnAcc >= 1.0f) { spawnAcc -= 1.0f; static const float tr[4][3] = { { 1, 1, 1 }, { 0.5f, 0.5f, 0.5f }, { 1, 1.5f, 1 }, { 1, 2, 0.5f } }; const float r = pick (tr[var], 3); spawn (double (w - anchor) + 2000 + rng.uni() * 0.2 * sr, int ((0.3f + 0.6f * rng.uni()) * sr), r, r, 1.0f); }
+                    break;
+                }
+                case Strum: if (onset) { const int k = 3 + (int) (act * 5.0f); for (int j = 0; j < k; ++j) spawn (int (0.02 * sr), int (0.35 * sr), chords[var][j % 4] * (j >= 4 ? 2.0f : 1.0f), chords[var][j % 4] * (j >= 4 ? 2.0f : 1.0f), 1.2f, j * std::max (1, step / 4)); } break;
+                case Blocks: if (tick && rng.uni() < 0.3f + act * 0.7f) { static const float br[4] = { 1, -1, 2, 0 }; float r = br[var]; if (var == 3) { const float o[3] = { 1, -1, 2 }; r = pick (o, 3); } for (int j = 0; j < 1 + (int) (act * 3); ++j) spawn (step, step / (1 + j), r, r, 0.9f, j * step / (1 + j)); } break;
+                case Interrupt: if (tick && rng.uni() < 0.35f + act * 0.6f) { const float r = var == 1 ? -1.0f : (var == 2 ? 0.5f : 1.0f); spawn (step * (1 + rng.next() % 8), step, var == 3 && rng.uni() < 0.5f ? -r : r, var == 3 && rng.uni() < 0.5f ? -r : r, 1.0f); } break;
+                case Arp:    if (tick) { const float r = arps[var][arpIdx++ % 6]; spawn (step, step, r, r, 0.85f); } break;
+                default: break;
+            }
+            if (algo == Pattern || algo == Warp)
+            {
+                // rhythmic multi-tap delay; Warp bends every tap in pitch like a stretched tape
+                const int taps = 1 + (int) (act * 3.99f);
+                wph += (0.15f + 0.2f * float (var)) / float (sr); if (wph >= 1) wph -= 1;
+                for (int k = 0; k < taps; ++k)
+                {
+                    float d = std::min (float (mask - 64), float (step) * patt[var][k]);
+                    if (algo == Warp) d += float (sr) * (0.004f + 0.003f * float (var)) * (1.0f + fastSin2Pi (wph + 0.25f * float (k)));
+                    const float gk = std::pow (0.75f, float (k));
+                    const float pan = (k & 1) ? 0.8f : 0.2f;
+                    yl += rd (0, double (w) - d) * gk * (1.0f - pan) * 0.8f;
+                    yr += rd (1, double (w) - d) * gk * pan * 0.8f;
+                }
+            }
+            int active = 0;
+            for (auto& g : gv)
+            {
+                if (! g.on) continue;
+                if (g.delay > 0) { --g.delay; g.pos += 1.0; continue; }
+                const float t = float (g.t) / float (g.len);
+                const float e = t < attack ? t / attack : std::pow (std::max (0.0f, (1.0f - t) / (1.0f - attack)), decayPow);
+                yl += rd (0, g.pos) * e * g.amp * g.gl; yr += rd (1, g.pos) * e * g.amp * g.gr;
+                g.pos += (double) lerp (g.rate, g.rateEnd, t);
+                if (++g.t >= g.len) g.on = false;
+                ++active;
+            }
+            if (active > 1) { const float nrm = 1.0f / std::sqrt ((float) active * 0.5f); yl *= nrm; yr *= nrm; }
+            if (algo < Pattern) { yl *= 1.5f; yr *= 1.5f; }
+            filt[0].tick (yl); filt[1].tick (yr);
+            yl = flt < 0 ? filt[0].lp : filt[0].hp; yr = flt < 0 ? filt[1].lp : filt[1].hp;
+            last[0] = fastTanh (yl); last[1] = fastTanh (yr);
+            vl[(size_t) i] = yl; vr[(size_t) i] = yr;
+        }
+        std::copy (vl.begin(), vl.begin() + n, L); std::copy (vr.begin(), vr.begin() + n, R);
+        if (space > 0.0f)
+        {
+            const float rv[8] = { 75.0f, 0.6f + space * 6.0f, 45.0f, 10.0f, 50.0f, 0.0f, 150.0f, 130.0f };
+            verb.process (vl.data(), vr.data(), n, rv, ctx);
+            for (int i = 0; i < n; ++i) { L[i] = L[i] * (1.0f - 0.5f * space) + vl[(size_t) i] * space; R[i] = R[i] * (1.0f - 0.5f * space) + vr[(size_t) i] * space; }
+        }
+        meter = clampf (rep, 0, 1);
+    }
+};
+
 } // namespace
 
 std::unique_ptr<Effect> createEffect (int type)
@@ -2908,6 +3323,9 @@ std::unique_ptr<Effect> createEffect (int type)
         case FxExciter:    e.reset (new ExciterFx()); break;
         case FxDoubler:    e.reset (new DoublerFx()); break;
         case FxAcoustic:   e.reset (new AcousticFx()); break;
+        case FxPrism:      e.reset (new PrismFx()); break;
+        case FxDream:      e.reset (new DreamFx()); break;
+        case FxMicroverse: e.reset (new MicroverseFx()); break;
         default:           e.reset (new NoneFx()); type = FxNone; break;
     }
     e->type = type;

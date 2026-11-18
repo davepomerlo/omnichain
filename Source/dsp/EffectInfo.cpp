@@ -60,6 +60,16 @@ static const char* const kBellMat[]    = { "Church Bell", "Glass", "Gamelan", "T
 static const char* const kRpm[]        = { "33 rpm", "45 rpm", "78 rpm" };
 static const char* const kDblVoices[]  = { "2 takes", "4 takes" };
 static const char* const kBodies[]     = { "Dreadnought", "Jumbo", "Parlor", "Nylon" };
+static const char* const kPedalUD[]    = { "Up", "Down" };
+static const char* const kRecStart[]   = { "Instantly", "On first note" };
+static const char* const kPrismMode[]  = { "Smooth", "Semitones", "5ths & Octaves", "Swoop" };
+static const char* const kPrismSec[]   = { "Off", "-1 oct", "-5th", "-4th", "+min 3rd", "+maj 3rd", "+4th", "+5th", "+1 oct", "+2 oct", "Detune" };
+static const char* const kDreamWet[]   = { "Reverb", "Delay", "Slip" };
+static const char* const kDreamLoop[]  = { "Off", "Env", "Tape", "Stretch" };
+static const char* const kCapture[]    = { "Listen", "Hold" };
+static const char* const kMicroAlgo[]  = { "Mosaic", "Glide", "Haze", "Tunnel", "Strum", "Blocks", "Interrupt", "Arp", "Pattern", "Warp" };
+static const char* const kVariation[]  = { "A", "B", "C", "D" };
+static const char* const kMicroTime[]  = { "1 bar", "1/2", "1/4", "1/8", "1/8T", "1/16" };
 static const char* const kOffOn[]      = { "Off", "On" };
 static const char* const kGrainPitch[] = { "Unison", "Oct Up", "Oct Down", "Oct Random", "Fifths", "Detune" };
 
@@ -243,9 +253,10 @@ static const EffectInfo kInfos[NumEffectTypes] =
       { P ("Low Split", 60, 800, 180, Log, "Hz"), P ("High Split", 1000, 10000, 3000, Log, "Hz"), P ("Low Thresh", -50, 0, -24, Lin, "dB"),
         P ("Mid Thresh", -50, 0, -22, Lin, "dB"), P ("High Thresh", -50, 0, -24, Lin, "dB"), P ("Ratio", 1, 10, 3, Log, ":1"),
         P ("Speed", 0, 100, 50, Lin, "%"), P ("Makeup", 0, 18, 3, Lin, "dB") } },
-    { FxLooper, "Looper", "LOOP", CatUtility, 1.0f, "Record a loop (up to 45 s) and play over it. Turn Mode: Record, then Play or Overdub.",
-      { C ("Mode", kLoopMode, 0), P ("Loop Level", 0, 100, 100, Lin, "%"), P ("Overdub Keep", 0, 100, 100, Lin, "%"),
-        C ("Speed", kLoopSpeed, 1), C ("Direction", kLoopDir, 0), C ("Length", kLoopBars, 0) } },
+    { FxLooper, "Looper", "LOOP", CatUtility, 1.0f, "Up to 45 s, with overdub and undo. Use the buttons, or map a MIDI footswitch to Footswitch.",
+      { C ("Mode", kLoopMode, 0), P ("Level", 0, 100, 100, Lin, "%"), P ("Keep", 0, 100, 100, Lin, "%"),
+        C ("Speed", kLoopSpeed, 1), C ("Direction", kLoopDir, 0), C ("Length", kLoopBars, 0),
+        C ("Footswitch", kPedalUD, 0), C ("Start", kRecStart, 0) } },
     { FxFreqShift, "Frequency Shifter", "F-SHIFT", CatMod, 1.0f, "Shifts every frequency by the same Hz: metallic, detuned, spiralling with feedback.",
       { P ("Shift", -1000, 1000, 40, Lin, "Hz"), P ("Fine", -10, 10, 0, Lin, "Hz"), P ("Feedback", 0, 90, 0, Lin, "%"),
         P ("FB Delay", 1, 300, 20, Log, "ms"), P ("Stereo", 0, 100, 0, Lin, "%"), P ("Tone", 1000, 20000, 20000, Log, "Hz>") } },
@@ -273,6 +284,15 @@ static const EffectInfo kInfos[NumEffectTypes] =
     { FxAcoustic, "Acoustic Simulator", "ACOUSTIC", CatFilter, 1.0f, "Makes an electric guitar sound closer to an acoustic. Best with a clean neck pickup.",
       { C ("Body", kBodies, 0), P ("Body Amount", 0, 100, 60, Lin, "%"), P ("Sparkle", 0, 100, 50, Lin, "%"),
         P ("Scoop", 0, 100, 50, Lin, "%"), P ("Attack", 0, 100, 30, Lin, "%"), P ("Output", -12, 12, 0, Lin, "dB") } },
+    { FxPrism, "Prism Shifter", "PRISM", CatPitch, 1.0f, "Polyphonic pitch shifting; Magic feeds it back into itself for cascading tones (Rainbow Machine-inspired).",
+      { P ("Pitch", -12, 12, 12, Lin, "st"), C ("Mode", kPrismMode, 1), C ("Second Voice", kPrismSec, 0), P ("Primary", 0, 100, 70, Lin, "%"),
+        P ("Secondary", 0, 100, 50, Lin, "%"), P ("Magic", 0, 120, 25, Lin, "%"), P ("Tracking", 0, 100, 50, Lin, "%"), P ("Tone", 500, 20000, 9000, Log, "Hz") } },
+    { FxDream, "Dream Loop", "DREAM", CatTime, 0.5f, "Reverb/delay/slip channel plus an always-listening micro-looper and a lo-fi clock (MOOD MKII-inspired).",
+      { C ("Wet", kDreamWet, 0), P ("Time", 0, 100, 50, Lin, "%"), P ("Modify", 0, 100, 40, Lin, "%"), C ("Loop", kDreamLoop, 2),
+        P ("Length", 0.25f, 8, 2, Log, "s"), P ("Loop Modify", 0, 100, 64, Lin, "%"), P ("Clock", 0, 100, 100, Lin, "%"), C ("Capture", kCapture, 0) } },
+    { FxMicroverse, "Microverse", "MICRO", CatCreative, 0.5f, "Ten tempo-locked granular, glitch and multi-delay algorithms, four variations each (Microcosm-inspired).",
+      { C ("Algorithm", kMicroAlgo, 0), C ("Variation", kVariation, 0), C ("Time", kMicroTime, 3), P ("Activity", 0, 100, 50, Lin, "%"),
+        P ("Shape", 0, 100, 40, Lin, "%"), P ("Repeats", 0, 95, 35, Lin, "%"), P ("Filter", -100, 100, 0, Lin, "%"), P ("Space", 0, 100, 30, Lin, "%") } },
 };
 
 const EffectInfo& getInfo (int type)

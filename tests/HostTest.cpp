@@ -273,6 +273,49 @@ int main (int argc, char** argv)
         p.currentPresetName = "v2.0 showcase"; p.engine.service(); snapshot (p, outDir + "/omnichain_v20.png");
     }
 
+
+    // 11. v2.1: scalable window, easy patches, effect patches, looper panel
+    {
+        OmniChainProcessor q; q.setPlayConfigDetails (2, 2, sr, bs); q.prepareToPlay (sr, bs);
+        q.setSlotType (0, oc::FxDistortion, true);
+                q.markClean(); CHECK (! q.isModified(), "clean after markClean");
+        q.param (0, "p1")->setValueNotifyingHost (0.9f);
+        CHECK (q.isModified(), "knob change marks the preset as edited");
+        const String nm = "zz OmniChain test preset";
+        CHECK (q.saveUserPreset (nm) && q.userPresetFile (nm).existsAsFile(), "save by name");
+        CHECK (! q.isModified() && q.currentPresetName == nm, "saved preset is clean and current");
+        // effect patch round trip
+        const auto patch = OmniChainProcessor::getSlotPatchFolder (oc::FxDistortion).getChildFile ("zz test.ocslot");
+        CHECK (q.saveSlotPatch (0, patch), "save effect patch");
+        q.setSlotType (3, oc::FxChorus, true);
+        CHECK (q.loadSlotPatch (3, patch) && q.getSlotType (3) == oc::FxDistortion && std::abs (q.param (3, "p1")->getValue() - 0.9f) < 1e-4f, "load effect patch into another slot");
+        q.userPresetFile (nm).deleteFile(); patch.deleteFile();
+
+        // window scaling
+        std::unique_ptr<AudioProcessorEditor> ed (q.createEditor());
+        const int w0 = ed->getWidth(), h0 = ed->getHeight();
+        ed->setSize (roundToInt (w0 * 1.5), roundToInt (h0 * 1.5));
+        std::printf ("editor %dx%d -> %dx%d, saved scale %.2f\n", w0, h0, ed->getWidth(), ed->getHeight(), q.getUiScale());
+        CHECK (w0 == 1220 && std::abs (q.getUiScale() - 1.5f) < 0.02f, "opens at 100% and remembers 150%");
+        ed->setVisible (true); MessageManager::getInstance()->runDispatchLoopUntil (100);
+        auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+        { File f (outDir + "/omnichain_v21_scaled150.png"); f.deleteFile(); FileOutputStream os (f); PNGImageFormat().writeImageToStream (img, os); }
+        ed->setSize (w0, h0); ed.reset();
+        q.setUiScale (1.0f);
+
+        // looper with a recorded loop + the three new effects
+        const int show[4] = { oc::FxLooper, oc::FxPrism, oc::FxDream, oc::FxMicroverse };
+        for (int sl = 0; sl < 8; ++sl) q.setSlotType (sl, sl < 4 ? show[sl] : oc::FxNone, true);
+        q.engine.service(); bool fin = true; runAudio (q, 4, bs, 2, sr, fin); q.engine.service();
+        q.engine.sendCommand (0, 8); runAudio (q, 150, bs, 2, sr, fin);
+        q.engine.sendCommand (0, 8); runAudio (q, 60, bs, 2, sr, fin);
+        q.engine.sendCommand (0, 8); runAudio (q, 30, bs, 2, sr, fin);
+        std::printf ("looper state %.0f (4 = overdub), length %.2f s\n", q.engine.getSlotStatus (0, 0), q.engine.getSlotStatus (0, 1));
+        CHECK (fin && (int) q.engine.getSlotStatus (0, 0) == 4 && q.engine.getSlotStatus (0, 1) > 1.0f, "looper via buttons");
+        q.currentPresetName = "v2.1 showcase"; q.markClean();
+        snapshot (q, outDir + "/omnichain_v21.png");
+    }
+
     std::printf ("\n%s (%d failures)\n", failures ? "FAILED" : "ALL HOST TESTS OK", failures);
     return failures ? 1 : 0;
 }

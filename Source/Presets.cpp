@@ -362,6 +362,41 @@ const std::vector<PresetDef>& getFactoryPresets()
         { "Library: Plate Reverb (IR)", {
             { FxAmp, 100, 0, { 20, 5, 5, 6, 5.5f, 1, 5, 1 } },
             { FxCabIR, 30, 0, { 150, 9000, 1000, 0 }, false, "IR/Spaces/Bright Plate.wav" } } },
+        // ---- v2.1 ----
+        { "Prism Cascade", {
+            { FxCompressor, 100, 0, { -24, 3, 10, 150, 3, 40, 20 } },
+            { FxPrism, 100, 0, { 12, 1, 7, 70, 40, 75, 60, 8000 } },
+            { FxReverb, 30, 0, { 75, 4, 40, 25, 50, 0, 150, 130 } } } },
+
+        { "Prism Swoop Lead", {
+            { FxDistortion, 100, 0, { 55, 55, 0, 0, 2, -17 } },
+            { FxAmp, 100, 0, { 40, 5, 6, 5.5f, 5, 2, 5, 0 } },
+            { FxPrism, 100, 0, { 7, 3, 8, 60, 35, 15, 55, 9000 } },
+            { FxDelay, 25, 0, { D, 7, 30, 4500, 1, 20, 50, 0 } } } },
+
+        { "Dream Tape Loop", {
+            { FxAmp, 100, 0, { 18, 5, 5, 6, 5.5f, 1, 5, 1 } },
+            { FxDream, 55, 0, { 0, 60, 45, 2, 2.5f, 64, 70, 0 } } } },
+
+        { "Dream Stretch Pad", {
+            { FxDream, 60, 0, { 0, 80, 30, 3, 4, 20, 100, 0 } },
+            { FxChorus, 35, 0, { 0.3f, 50, 12, 3, 100, 9000 } } } },
+
+        { "Micro Mosaic", {
+            { FxMicroverse, 55, 0, { 0, 0, 3, 55, 35, 40, 0, 35 } },
+            { FxDelay, 20, 0, { D, 8, 30, 5000, 3, 10, 40, 0 } } } },
+
+        { "Micro Haze Cloud", {
+            { FxMicroverse, 60, 0, { 2, 1, 3, 70, 60, 45, -25, 55 } } } },
+
+        { "Micro Glitch Blocks", {
+            { FxOverdrive, 100, 0, { 25, 55, 600, 20, 20, -9, 0 } },
+            { FxMicroverse, 60, 0, { 5, 3, 3, 65, 15, 20, 0, 15 } } } },
+
+        { "Looper + Microverse", {
+            { FxCompressor, 100, 0, { -22, 3, 10, 150, 3, 40, 20 } },
+            { FxLooper, 100, 0, { 0, 100, 100, 1, 0, 0, 0, 1 } },
+            { FxMicroverse, 45, 0, { 8, 0, 3, 50, 40, 35, 0, 30 } } } },
     };
     return presets;
 }

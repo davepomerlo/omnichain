@@ -138,7 +138,7 @@ void Knob::setAccent (Colour c) { slider.setColour (Slider::rotarySliderFillColo
 } // namespace ocui
 
 // =====================================================================================
-SlotCard::SlotCard (OmniChainProcessor& p, OmniChainEditor& e, int i) : proc (p), editor (e), index (i)
+SlotCard::SlotCard (OmniChainProcessor& p, OmniChainPanel& e, int i) : proc (p), editor (e), index (i)
 {
     typeBox.addItem (oc::getInfo (0).name, 1);
     for (int c = 1; c < oc::NumCategories; ++c)
@@ -190,6 +190,8 @@ SlotCard::SlotCard (OmniChainProcessor& p, OmniChainEditor& e, int i) : proc (p)
     filePrev.onClick = [this] { proc.stepSlotFile (index, -1); };
     fileNext.onClick = [this] { proc.stepSlotFile (index, 1); };
     for (auto* b : { &loadBtn, &filePrev, &fileNext }) addChildComponent (*b);
+    looperPanel = std::make_unique<LooperPanel> (proc, index);
+    addChildComponent (*looperPanel);
 
     for (auto* s : { &mix, &level })
     {
@@ -237,11 +239,12 @@ void SlotCard::rebuildForType (int type)
     blurb.setVisible (! usesFile);
     for (Component* c : { (Component*) &fileLabel, (Component*) &loadBtn, (Component*) &filePrev, (Component*) &fileNext }) c->setVisible (usesFile);
     shownFileText = "\x01";
+    looperPanel->setVisible (type == oc::FxLooper);
     for (int k = 0; k < oc::kParamsPerSlot; ++k)
     {
         const auto& pi = info.params[k];
         auto& kn = knobs[k];
-        kn.setVisible (pi.name != nullptr);
+        kn.setVisible (pi.name != nullptr && ! (type == oc::FxLooper && (k == 0 || k == 6)));
         if (pi.name == nullptr) continue;
         kn.name.setText (String (pi.name).toUpperCase(), dontSendNotification);
         kn.setAccent (accent);
@@ -314,6 +317,15 @@ void SlotCard::resized()
     mixLabel.setBounds (bl.removeFromTop (14)); mix.setBounds (bl);
     levelLabel.setBounds (br.removeFromTop (14)); level.setBounds (br);
     r.removeFromTop (2);
+    if (shownType == oc::FxLooper)
+    {
+        // looper: transport panel on top, its six settings in one row underneath (Mode / Footswitch stay automatable)
+        looperPanel->setBounds (r.removeFromTop (92).reduced (0, 2));
+        const int order[6] = { 1, 2, 3, 4, 5, 7 };
+        const int cw6 = r.getWidth() / 6;
+        for (int j = 0; j < 6; ++j) knobs[order[j]].setBounds (r.getX() + j * cw6, r.getY() + 4, cw6, r.getHeight() - 4);
+        return;
+    }
     // effects with 7 or 8 knobs use a 4-column grid; the rest keep the roomier 3 columns
     const auto& inf = oc::getInfo (shownType < 0 ? 0 : shownType);
     const int cols = (inf.params[6].name != nullptr || inf.params[7].name != nullptr) ? 4 : 3;
@@ -405,7 +417,7 @@ void SlotCard::itemDropped (const SourceDetails& d)
 bool SlotCard::isInterestedInFileDrag (const StringArray& files)
 {
     for (auto& f : files)
-        if (OmniChainProcessor::isIrFile (File (f)) || OmniChainProcessor::isNamFile (File (f))) return true;
+        if (OmniChainProcessor::isIrFile (File (f)) || OmniChainProcessor::isNamFile (File (f)) || File (f).hasFileExtension ("ocslot")) return true;
     return false;
 }
 
@@ -413,7 +425,10 @@ void SlotCard::filesDropped (const StringArray& files, int, int)
 {
     dragOver = false; repaint();
     for (auto& f : files)
+    {
+        if (File (f).hasFileExtension ("ocslot")) { proc.loadSlotPatch (index, File (f)); break; }
         if (OmniChainProcessor::isIrFile (File (f)) || OmniChainProcessor::isNamFile (File (f))) { proc.loadSlotFile (index, File (f)); break; }
+    }
 }
 
 void SlotCard::addLibraryFolder (PopupMenu& m, const File& dir, bool nam, const File& current)
@@ -474,18 +489,55 @@ void SlotCard::openFileChooser()
     });
 }
 
+void SlotCard::saveSlotPatch()
+{
+    const int type = proc.getSlotType (index);
+    auto* aw = new AlertWindow ("Save effect patch", String ("Save these ") + oc::getInfo (type).name + " settings so you can load them into any slot later.",
+                                MessageBoxIconType::NoIcon, this);
+    aw->addTextEditor ("name", "", "Name");
+    aw->addButton ("Save", 1, KeyPress (KeyPress::returnKey));
+    aw->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
+    SafePointer<SlotCard> safe (this);
+    aw->enterModalState (true, ModalCallbackFunction::create ([safe, aw, type] (int r)
+    {
+        if (safe == nullptr || r != 1) return;
+        const auto name = File::createLegalFileName (aw->getTextEditorContents ("name").trim());
+        if (name.isEmpty()) return;
+        safe->proc.saveSlotPatch (safe->index, OmniChainProcessor::getSlotPatchFolder (type).getChildFile (name + ".ocslot"));
+    }), true);
+}
+
 void SlotCard::showMenu()
 {
-    PopupMenu m;
+    PopupMenu m, patches;
+    slotPatchFiles.clear();
+    auto addFolder = [this] (PopupMenu& pm, const File& dir)
+    {
+        auto fs = dir.findChildFiles (File::findFiles, false, "*.ocslot"); fs.sort();
+        for (auto& f : fs) { slotPatchFiles.add (f); pm.addItem (1000 + slotPatchFiles.size() - 1, f.getFileNameWithoutExtension()); }
+    };
+    if (shownType != oc::FxNone) addFolder (patches, OmniChainProcessor::getSlotPatchFolder (shownType));
+    else
+    {
+        auto dirs = OmniChainProcessor::getSlotPatchRoot().findChildFiles (File::findDirectories, false); dirs.sort();
+        for (auto& d : dirs) { PopupMenu sub; addFolder (sub, d); if (sub.getNumItems() > 0) patches.addSubMenu (d.getFileName(), sub); }
+    }
     m.addSectionHeader ("Slot " + String (index + 1));
+    m.addItem (6, "Save effect patch...", shownType != oc::FxNone);
+    m.addSubMenu ("Load effect patch", patches, patches.getNumItems() > 0);
+    m.addItem (7, "Open effect patches folder");
+    m.addSeparator();
     m.addItem (1, "Reset parameters", shownType != oc::FxNone);
     m.addItem (2, "Duplicate into next empty slot", shownType != oc::FxNone);
     m.addItem (3, "Move to start of chain", index > 0);
     m.addItem (4, "Move to end of chain", index < oc::kNumSlots - 1);
     m.addSeparator();
     m.addItem (5, "Clear slot", shownType != oc::FxNone);
-    m.showMenuAsync (PopupMenu::Options().withTargetComponent (this), [this] (int r)
+    SafePointer<SlotCard> safe (this);
+    m.showMenuAsync (PopupMenu::Options().withTargetComponent (this), [safe] (int r)
     {
+        if (safe == nullptr) return;
+        auto& proc = safe->proc; const int index = safe->index;
         switch (r)
         {
             case 1: proc.resetSlotParams (index); break;
@@ -496,9 +548,85 @@ void SlotCard::showMenu()
             case 3: proc.moveSlot (index, 0); break;
             case 4: proc.moveSlot (index, oc::kNumSlots - 1); break;
             case 5: proc.setSlotType (index, oc::FxNone, true); break;
-            default: break;
+            case 6: safe->saveSlotPatch(); break;
+            case 7:
+            {
+                auto d = safe->shownType != oc::FxNone ? OmniChainProcessor::getSlotPatchFolder (safe->shownType) : OmniChainProcessor::getSlotPatchRoot();
+                d.createDirectory(); d.startAsProcess(); break;
+            }
+            default:
+                if (r >= 1000 && isPositiveAndBelow (r - 1000, safe->slotPatchFiles.size())) proc.loadSlotPatch (index, safe->slotPatchFiles[r - 1000]);
+                break;
         }
     });
+}
+
+// =====================================================================================
+LooperPanel::LooperPanel (OmniChainProcessor& p, int s) : proc (p), slot (s)
+{
+    for (auto* b : { &mainBtn, &playBtn, &undoBtn, &clearBtn }) addAndMakeVisible (*b);
+    mainBtn.onClick  = [this] { proc.engine.sendCommand (slot, 8); };
+    playBtn.onClick  = [this] { proc.engine.sendCommand (slot, (state == 3 || state == 4) ? 2 : 3); };
+    undoBtn.onClick  = [this] { proc.engine.sendCommand (slot, 4); };
+    clearBtn.onClick = [this] { proc.engine.sendCommand (slot, 5); };
+    mainBtn.setTooltip ("Record, then close the loop, then overdub. A MIDI footswitch on the Footswitch knob does the same: double-tap stops, hold 1 s undoes.");
+    undoBtn.setTooltip ("Undo the last overdub (press again to redo)");
+    clearBtn.setTooltip ("Erase the loop");
+}
+
+void LooperPanel::timerCallback()
+{
+    const int st = (int) proc.engine.getSlotStatus (slot, 0);
+    const float ln = proc.engine.getSlotStatus (slot, 1), ps = proc.engine.getSlotStatus (slot, 2);
+    const int fl = (int) proc.engine.getSlotStatus (slot, 3);
+    if (st != state || fl != flags)
+    {
+        static const char* main[6] = { "Record", "Start now", "Close loop", "Overdub", "Stop dub", "Record new" };
+        state = st; flags = fl;
+        mainBtn.setButtonText (main[jlimit (0, 5, st)]);
+        if (st == 5) mainBtn.setButtonText ("Overdub");
+        mainBtn.setColour (TextButton::buttonColourId, st == 2 ? Colour (0xffb3262e) : (st == 4 ? Colour (0xffb36b1e) : (st == 1 ? Colour (0xff7a2a2a) : ocui::knobBody)));
+        playBtn.setButtonText ((st == 3 || st == 4) ? "Stop" : "Play");
+        playBtn.setEnabled (st >= 2);
+        undoBtn.setButtonText ((fl & 2) ? "Redo" : "Undo");
+        undoBtn.setEnabled ((fl & 1) != 0);
+        clearBtn.setEnabled (st != 0);
+    }
+    if (std::abs (ln - len) > 0.01f || std::abs (ps - pos) > 0.002f) { len = ln; pos = ps; repaint(); }
+}
+
+void LooperPanel::paint (Graphics& g)
+{
+    auto r = getLocalBounds().toFloat();
+    g.setColour (ocui::bg0.withAlpha (0.6f));
+    g.fillRoundedRectangle (r, 8.0f);
+    auto top = r.reduced (10, 6).removeFromTop (24);
+    static const char* names[6] = { "Empty: press Record", "Waiting for your first note...", "Recording", "Playing", "Overdubbing", "Stopped" };
+    const int st = jlimit (0, 5, state);
+    const Colour stc = st == 2 ? Colour (0xffff5a5a) : (st == 4 ? Colour (0xffffa94d) : (st == 3 ? Colour (0xff4fd1a0) : ocui::textDim));
+    if (st == 2 || st == 4) { g.setColour (stc); g.fillEllipse (top.getX(), top.getCentreY() - 5, 10, 10); }
+    g.setColour (stc);
+    g.setFont (Font (15.0f, Font::bold));
+    g.drawText (names[st], top.withTrimmedLeft (st == 2 || st == 4 ? 16.0f : 0.0f), Justification::centredLeft);
+    if (len > 0.0f)
+    {
+        const int t10 = roundToInt (len * 10.0f);
+        g.setColour (ocui::text);
+        g.drawText (String (t10 / 600) + ":" + String ((t10 / 10) % 60).paddedLeft ('0', 2) + "." + String (t10 % 10), top, Justification::centredRight);
+    }
+    auto bar = r.reduced (10, 0).withTrimmedTop (36).removeFromTop (8);
+    g.setColour (ocui::track); g.fillRoundedRectangle (bar, 4.0f);
+    if (st >= 2 && st <= 4) { g.setColour (stc); g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * jlimit (0.0f, 1.0f, pos)), 4.0f); }
+}
+
+void LooperPanel::resized()
+{
+    auto r = getLocalBounds().reduced (8, 0).withTrimmedTop (52).removeFromTop (30);
+    mainBtn.setBounds (r.removeFromLeft (r.getWidth() * 38 / 100)); r.removeFromLeft (5);
+    const int w = (r.getWidth() - 10) / 3;
+    playBtn.setBounds (r.removeFromLeft (w)); r.removeFromLeft (5);
+    undoBtn.setBounds (r.removeFromLeft (w)); r.removeFromLeft (5);
+    clearBtn.setBounds (r);
 }
 
 // =====================================================================================
@@ -693,7 +821,7 @@ void StandaloneBar::resized()
 }
 
 // =====================================================================================
-OmniChainEditor::OmniChainEditor (OmniChainProcessor& p) : AudioProcessorEditor (&p), proc (p)
+OmniChainPanel::OmniChainPanel (OmniChainProcessor& p) : proc (p)
 {
     setLookAndFeel (&lnf);
     for (int i = 0; i < oc::kNumSlots; ++i)
@@ -715,8 +843,14 @@ OmniChainEditor::OmniChainEditor (OmniChainProcessor& p) : AudioProcessorEditor 
     prevBtn.onClick = [this] { stepPreset (-1); };
     nextBtn.onClick = [this] { stepPreset (1); };
     saveBtn.onClick = [this] { savePreset(); };
-    loadBtn.onClick = [this] { loadPreset(); };
+    loadBtn.onClick = [this] { showMoreMenu(); };
+    saveBtn.setTooltip ("Save this sound by name (it appears in the preset list)");
+    loadBtn.setTooltip ("Rename, delete, import or export presets");
     for (auto* b : { &prevBtn, &nextBtn, &saveBtn, &loadBtn }) addAndMakeVisible (*b);
+    for (int pct : { 75, 90, 100, 115, 125, 150, 175, 200 }) sizeBox.addItem ("Size " + String (pct) + "%", pct);
+    sizeBox.setTooltip ("Window size (you can also drag the bottom-right corner)");
+    sizeBox.onChange = [this] { if (onScaleChosen && sizeBox.getSelectedId() > 0) onScaleChosen ((float) sizeBox.getSelectedId() / 100.0f); };
+    addAndMakeVisible (sizeBox);
 
     const Colour gAcc (0xff7c9cff);
     struct G { ocui::Knob* k; const char* id; const char* name; bool bip; double def; };
@@ -743,13 +877,13 @@ OmniChainEditor::OmniChainEditor (OmniChainProcessor& p) : AudioProcessorEditor 
     startTimerHz (30);
 }
 
-OmniChainEditor::~OmniChainEditor()
+OmniChainPanel::~OmniChainPanel()
 {
     stopTimer();
     setLookAndFeel (nullptr);
 }
 
-void OmniChainEditor::rebuildPresetMenu()
+void OmniChainPanel::rebuildPresetMenu()
 {
     presetBox.clear (dontSendNotification);
     presetBox.addSectionHeading ("Factory");
@@ -766,7 +900,7 @@ void OmniChainEditor::rebuildPresetMenu()
     shownPreset = proc.currentPresetName;
 }
 
-void OmniChainEditor::stepPreset (int delta)
+void OmniChainPanel::stepPreset (int delta)
 {
     const int nF = (int) getFactoryPresets().size(), total = nF + userPresets.size();
     int cur = -1;
@@ -779,32 +913,141 @@ void OmniChainEditor::stepPreset (int delta)
     presetBox.setSelectedId (next < nF ? next + 1 : 1001 + (next - nF), sendNotificationSync);
 }
 
-void OmniChainEditor::savePreset()
+void OmniChainPanel::savePreset (bool askNewName)
 {
-    auto folder = OmniChainProcessor::getUserPresetFolder();
-    chooser = std::make_unique<FileChooser> ("Save OmniChain preset", folder.getChildFile (File::createLegalFileName (proc.currentPresetName) + ".ocpreset"), "*.ocpreset");
-    chooser->launchAsync (FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::warnAboutOverwriting,
-                          [this] (const FileChooser& fc)
-                          {
-                              auto f = fc.getResult();
-                              if (f == File()) return;
-                              proc.savePresetFile (f.withFileExtension ("ocpreset"));
-                              rebuildPresetMenu();
-                          });
+    bool isFactory = false;
+    for (auto& f : getFactoryPresets()) if (proc.currentPresetName == f.name) isFactory = true;
+    const String suggestion = askNewName ? String() : (isFactory ? proc.currentPresetName + " (mine)" : proc.currentPresetName);
+    auto* aw = new AlertWindow ("Save preset", "Give this sound a name. It's saved in Documents > OmniChain Presets and appears in the preset list.",
+                                MessageBoxIconType::NoIcon, this);
+    aw->addTextEditor ("name", suggestion, "Name");
+    aw->addButton ("Save", 1, KeyPress (KeyPress::returnKey));
+    aw->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
+    SafePointer<OmniChainPanel> safe (this);
+    aw->enterModalState (true, ModalCallbackFunction::create ([safe, aw] (int r)
+    {
+        if (safe == nullptr || r != 1) return;
+        const auto name = File::createLegalFileName (aw->getTextEditorContents ("name").trim());
+        if (name.isEmpty()) return;
+        if (safe->proc.userPresetFile (name).existsAsFile() && name != safe->proc.currentPresetName)
+            AlertWindow::showOkCancelBox (MessageBoxIconType::QuestionIcon, "Replace preset?", "A preset called \"" + name + "\" already exists. Replace it?",
+                                          "Replace", "Cancel", safe.getComponent(),
+                                          ModalCallbackFunction::create ([safe, name] (int ok) { if (safe != nullptr && ok) safe->doSave (name); }));
+        else safe->doSave (name);
+    }), true);
 }
 
-void OmniChainEditor::loadPreset()
+void OmniChainPanel::doSave (const String& name)
 {
-    chooser = std::make_unique<FileChooser> ("Load OmniChain preset", OmniChainProcessor::getUserPresetFolder(), "*.ocpreset");
-    chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
-                          [this] (const FileChooser& fc)
-                          {
-                              auto f = fc.getResult();
-                              if (f.existsAsFile()) { proc.loadPresetFile (f); rebuildPresetMenu(); }
-                          });
+    if (proc.saveUserPreset (name)) { rebuildPresetMenu(); shownPreset = {}; }
+    else AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Couldn't save", "The preset folder couldn't be written to:\n" + OmniChainProcessor::getUserPresetFolder().getFullPathName());
 }
 
-void OmniChainEditor::timerCallback()
+void OmniChainPanel::importPreset (const File& f)
+{
+    auto dst = OmniChainProcessor::getUserPresetFolder().getChildFile (f.getFileName());
+    if (f.getParentDirectory() != OmniChainProcessor::getUserPresetFolder())
+    {
+        dst = dst.getNonexistentSibling (false);
+        f.copyFileTo (dst);
+    }
+    proc.loadPresetFile (dst);
+    rebuildPresetMenu();
+}
+
+void OmniChainPanel::showMoreMenu()
+{
+    const bool user = isUserPreset();
+    PopupMenu m;
+    m.addItem (1, "Save as a new preset...");
+    m.addItem (2, "Rename this preset...", user);
+    m.addItem (3, "Delete this preset", user);
+    m.addItem (8, "Revert to saved version", proc.isModified() && proc.currentPresetName != "Custom");
+    m.addSeparator();
+    m.addItem (4, "Import preset file...");
+    m.addItem (5, "Export this preset to a file...");
+    m.addItem (6, "Open presets folder");
+    SafePointer<OmniChainPanel> safe (this);
+    m.showMenuAsync (PopupMenu::Options().withTargetComponent (&loadBtn), [safe] (int r)
+    {
+        if (safe == nullptr || r == 0) return;
+        auto& pr = safe->proc;
+        const auto cur = pr.userPresetFile (pr.currentPresetName);
+        switch (r)
+        {
+            case 1: safe->savePreset (true); break;
+            case 2:
+            {
+                auto* aw = new AlertWindow ("Rename preset", "New name:", MessageBoxIconType::NoIcon, safe.getComponent());
+                aw->addTextEditor ("name", pr.currentPresetName);
+                aw->addButton ("Rename", 1, KeyPress (KeyPress::returnKey)); aw->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
+                aw->enterModalState (true, ModalCallbackFunction::create ([safe, aw, cur] (int ok)
+                {
+                    if (safe == nullptr || ! ok) return;
+                    const auto name = File::createLegalFileName (aw->getTextEditorContents ("name").trim());
+                    const auto dst = safe->proc.userPresetFile (name);
+                    if (name.isEmpty() || dst.existsAsFile()) return;
+                    if (cur.moveFileTo (dst)) { safe->proc.currentPresetName = name; safe->rebuildPresetMenu(); }
+                }), true);
+                break;
+            }
+            case 3:
+                AlertWindow::showOkCancelBox (MessageBoxIconType::WarningIcon, "Delete preset?", "Delete \"" + pr.currentPresetName + "\"? This can't be undone.",
+                                              "Delete", "Cancel", safe.getComponent(),
+                                              ModalCallbackFunction::create ([safe, cur] (int ok)
+                                              {
+                                                  if (safe == nullptr || ! ok) return;
+                                                  cur.moveToTrash();
+                                                  safe->proc.currentPresetName = "Custom";
+                                                  safe->rebuildPresetMenu();
+                                              }));
+                break;
+            case 4:
+                safe->chooser = std::make_unique<FileChooser> ("Import OmniChain preset", File::getSpecialLocation (File::userHomeDirectory), "*.ocpreset");
+                safe->chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles, [safe] (const FileChooser& fc)
+                {
+                    if (safe != nullptr && fc.getResult().existsAsFile()) safe->importPreset (fc.getResult());
+                });
+                break;
+            case 5:
+                safe->chooser = std::make_unique<FileChooser> ("Export preset", File::getSpecialLocation (File::userDesktopDirectory).getChildFile (File::createLegalFileName (pr.currentPresetName) + ".ocpreset"), "*.ocpreset");
+                safe->chooser->launchAsync (FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::warnAboutOverwriting, [safe] (const FileChooser& fc)
+                {
+                    if (safe == nullptr || fc.getResult() == File()) return;
+                    const auto keepName = safe->proc.currentPresetName;
+                    safe->proc.savePresetFile (fc.getResult().withFileExtension ("ocpreset"));
+                    safe->proc.currentPresetName = keepName;
+                });
+                break;
+            case 6: OmniChainProcessor::getUserPresetFolder().startAsProcess(); break;
+            case 8:
+                if (cur.existsAsFile()) pr.loadPresetFile (cur);
+                else for (int i = 0; i < pr.getNumPrograms(); ++i) if (pr.getProgramName (i) == pr.currentPresetName) pr.setCurrentProgram (i);
+                break;
+            default: break;
+        }
+    });
+}
+
+bool OmniChainPanel::isInterestedInFileDrag (const StringArray& files)
+{
+    for (auto& f : files) if (File (f).hasFileExtension ("ocpreset")) return true;
+    return false;
+}
+
+void OmniChainPanel::filesDropped (const StringArray& files, int, int)
+{
+    for (auto& f : files) if (File (f).hasFileExtension ("ocpreset")) { importPreset (File (f)); break; }
+}
+
+void OmniChainPanel::showScale (float sc)
+{
+    const int pct = roundToInt (sc * 100.0f);
+    if (sizeBox.indexOfItemId (pct) >= 0) sizeBox.setSelectedId (pct, dontSendNotification);
+    else sizeBox.setText ("Size " + String (pct) + "%", dontSendNotification);
+}
+
+void OmniChainPanel::timerCallback()
 {
     for (auto& c : cards) c->refresh();
     if (tunerOverlay.isVisible() != proc.tunerOn.load()) { tunerOverlay.setVisible (proc.tunerOn.load()); if (tunerOverlay.isVisible()) tunerOverlay.toFront (false); }
@@ -812,10 +1055,11 @@ void OmniChainEditor::timerCallback()
     const float i = proc.engine.takeInPeak(), o = proc.engine.takeOutPeak();
     inLvl = jmax (i, inLvl * decay); outLvl = jmax (o, outLvl * decay);
     repaint (getWidth() - 46, 10, 40, 60);
-    if (proc.currentPresetName != shownPreset) { shownPreset = proc.currentPresetName; presetBox.setText (shownPreset, dontSendNotification); }
+    const String nm = proc.currentPresetName + (proc.isModified() ? "  (edited)" : "");
+    if (nm != shownPreset) { shownPreset = nm; presetBox.setText (nm, dontSendNotification); }
 }
 
-void OmniChainEditor::paint (Graphics& g)
+void OmniChainPanel::paint (Graphics& g)
 {
     g.setGradientFill (ColourGradient (ocui::bg1, 0, 0, ocui::bg0, 0, (float) getHeight(), false));
     g.fillAll();
@@ -826,7 +1070,7 @@ void OmniChainEditor::paint (Graphics& g)
     g.drawText ("OMNICHAIN", 20, 14, 260, 32, Justification::centredLeft);
     g.setFont (Font (12.0f));
     g.setColour (ocui::textDim);
-    g.drawText ("modular multi-fx  |  62 effects  |  NAM + IR library  |  0 samples latency", 22, 46, 360, 16, Justification::centredLeft);
+    g.drawText ("modular multi-fx  |  65 effects  |  NAM + IR library  |  0 samples latency", 22, 46, 360, 16, Justification::centredLeft);
 
     // meters
     auto drawMeter = [&] (int x, float lvl, const char* lbl)
@@ -872,11 +1116,11 @@ void OmniChainEditor::paint (Graphics& g)
 
     g.setColour (ocui::textDim.withAlpha (0.8f));
     g.setFont (Font (11.5f));
-    g.drawText ("Drag a slot header to reorder  |  drop .wav IRs or .nam models on any slot  |  right-click a header for more  |  double-click a knob to reset",
+    g.drawText ("Drag a slot header to reorder  |  right-click a header to save or load effect patches  |  drop .nam / .wav / presets onto the window  |  drag the corner to resize",
                 0, getHeight() - 22, getWidth(), 16, Justification::centred);
 }
 
-void OmniChainEditor::resized()
+void OmniChainPanel::resized()
 {
     auto area = getLocalBounds();
     auto header = area.removeFromTop (80).reduced (16, 8);
@@ -886,7 +1130,8 @@ void OmniChainEditor::resized()
     inKnob.setBounds (knobsArea.removeFromLeft (70));
     mixKnob.setBounds (knobsArea.removeFromLeft (70));
     outKnob.setBounds (knobsArea.removeFromLeft (70));
-    auto pr = header.withSizeKeepingCentre (jmin (header.getWidth() - 20, 470), 30);
+    auto pr = header.withSizeKeepingCentre (jmin (header.getWidth() - 10, 560), 30);
+    sizeBox.setBounds (pr.removeFromRight (92)); pr.removeFromRight (6);
     loadBtn.setBounds (pr.removeFromRight (56)); pr.removeFromRight (6);
     saveBtn.setBounds (pr.removeFromRight (56)); pr.removeFromRight (6);
     nextBtn.setBounds (pr.removeFromRight (28)); pr.removeFromRight (4);
@@ -904,4 +1149,28 @@ void OmniChainEditor::resized()
         const int row = i / 4, col = i % 4;
         cards[i]->setBounds (area.getX() + col * (cw + gapX), area.getY() + row * (ch + gapY), cw, ch);
     }
+}
+
+// =====================================================================================
+OmniChainEditor::OmniChainEditor (OmniChainProcessor& p) : AudioProcessorEditor (&p), proc (p), panel (p)
+{
+    baseW = panel.getWidth(); baseH = panel.getHeight();
+    addAndMakeVisible (panel);
+    panel.onScaleChosen = [this] (float sc) { setSize (roundToInt (baseW * sc), roundToInt (baseH * sc)); };
+    setResizable (true, true);
+    setResizeLimits (roundToInt (baseW * 0.6), roundToInt (baseH * 0.6), roundToInt (baseW * 2.5), roundToInt (baseH * 2.5));
+    getConstrainer()->setFixedAspectRatio ((double) baseW / (double) baseH);
+    const float sc = proc.getUiScale();
+    ready = true;
+    setSize (roundToInt (baseW * sc), roundToInt (baseH * sc));
+}
+
+void OmniChainEditor::resized()
+{
+    if (! ready || getWidth() <= 0) return;      // ignore the zero-size calls made while the window is being built
+    const float sc = (float) getWidth() / (float) baseW;
+    panel.setTransform (AffineTransform::scale (sc));
+    panel.setBounds (0, 0, baseW, baseH);
+    proc.setUiScale (sc);
+    panel.showScale (sc);
 }

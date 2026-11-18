@@ -47,6 +47,9 @@ public:
     void setSlotResource (int slot, std::shared_ptr<const Resource> r);
     std::shared_ptr<const Resource> getSlotResource (int slot);
 
+    // Momentary command for the effect in a slot (delivered on the audio thread before its next block)
+    void sendCommand (int slot, int cmd) { if (slot >= 0 && slot < kNumSlots) slots[(size_t) slot].cmd.store (cmd, std::memory_order_release); }
+    float getSlotStatus (int s, int k) const { return slots[(size_t) s].status[k].load (std::memory_order_relaxed); }
     float getSlotMeter (int s) const { return slots[(size_t) s].meter.load (std::memory_order_relaxed); }
     float takeInPeak()  { return inPeak.exchange (0.0f); }
     float takeOutPeak() { return outPeak.exchange (0.0f); }
@@ -64,6 +67,8 @@ private:
         float frozen[kParamsPerSlot] = {};
         bool wasIdle = true, snap = true;
         std::atomic<float> meter { 0.0f };
+        std::atomic<int> cmd { 0 };
+        std::atomic<float> status[4] {};
     };
 
     void processChunk (float* L, float* R, int n, const Context& ctx);

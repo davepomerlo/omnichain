@@ -59,6 +59,8 @@ enum EffectType
     // Added in 2.0
     FxComp76, FxOpto, FxBusComp, FxPedalComp, FxVariMu, FxMultiband,
     FxLooper, FxFreqShift, FxWavefolder, FxUnison, FxBells, FxVinyl, FxUnderwater, FxExciter, FxDoubler, FxAcoustic,
+    // Added in 2.1
+    FxPrism, FxDream, FxMicroverse,
     NumEffectTypes
 };
 
@@ -115,11 +117,13 @@ public:
     double sr = 48000.0;
     int maxBlock = 512;
     float meter = 0.0f;               // 0..1 activity / gain reduction for the UI
+    float status[4] = {};             // effect-specific read-outs for custom UIs (e.g. looper state / length / position)
     std::shared_ptr<const Resource> resource;   // set before prepare() for file-based effects
     uint32_t resVer = 0;
 
     virtual void prepare (double sampleRate, int maxBlockSize) { sr = sampleRate; maxBlock = maxBlockSize; }
     virtual void reset() {}
+    virtual void command (int) {}     // momentary actions from the UI (looper buttons etc.), called on the audio thread
     // v = real-valued parameters for this block (already mapped from normalised)
     virtual void process (float* L, float* R, int n, const float* v, const Context& ctx) = 0;
 };
