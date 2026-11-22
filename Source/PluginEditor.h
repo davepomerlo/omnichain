@@ -50,6 +50,35 @@ private:
     int state = -1; float len = 0, pos = 0; int flags = 0;
 };
 
+// A button that reports press and release (for momentary actions like the delay's Twist)
+class HoldButton : public juce::TextButton
+{
+public:
+    using juce::TextButton::TextButton;
+    std::function<void (bool)> onHold;
+    void buttonStateChanged() override { const bool d = isDown(); if (d != held) { held = d; if (onHold) onHold (d); } }
+private:
+    bool held = false;
+};
+
+// Tap tempo, hold-to-Twist and a time read-out for a Delay slot
+class DelayBar : public juce::Component, private juce::Timer
+{
+public:
+    DelayBar (OmniChainProcessor& p, int slotIndex);
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void visibilityChanged() override;
+private:
+    void timerCallback() override;
+    OmniChainProcessor& proc;
+    const int slot;
+    juce::TextButton tapBtn { "Tap" };
+    HoldButton twistBtn { "Twist" };
+    juce::String shownText;
+    float shownTw = -1.0f, flash = 0.0f;
+};
+
 class SlotCard : public juce::Component, public juce::DragAndDropTarget, public juce::FileDragAndDropTarget
 {
 public:
@@ -71,6 +100,8 @@ public:
     void fileDragExit (const juce::StringArray&) override { dragOver = false; repaint(); }
     void filesDropped (const juce::StringArray& files, int, int) override;
     void openFileChooser();
+    void openImportChooser();
+    void importFiles (const juce::Array<juce::File>& files);
     void showLoadMenu();
     void addLibraryFolder (juce::PopupMenu&, const juce::File& dir, bool nam, const juce::File& current);
     juce::Array<juce::File> libraryFiles, slotPatchFiles;
@@ -95,7 +126,7 @@ private:
     ocui::Knob knobs[oc::kParamsPerSlot];
     juce::Slider mix, level;
     juce::Label mixLabel, levelLabel, blurb, fileLabel;
-    std::unique_ptr<juce::Component> looperPanel;
+    std::unique_ptr<juce::Component> looperPanel, delayBar;
     juce::TextButton loadBtn { "Load" }, filePrev { "<" }, fileNext { ">" };
     std::unique_ptr<juce::FileChooser> chooser;
     juce::String shownFileText;

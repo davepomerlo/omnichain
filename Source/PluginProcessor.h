@@ -71,11 +71,21 @@ public:
     static juce::File getContentFolder (bool nam);
     static juce::File getLibraryFolder();                       // factory NAM captures + IRs ({} if not installed)
     static juce::File resolveLibraryFile (const juce::File& saved);
+    static bool getNamLight();                                  // run NAM A2 captures at their Lite size (less CPU)
+    void setNamLight (bool on);
+    static juce::Array<juce::File> importToneFiles (const juce::Array<juce::File>& files, bool nam);   // .nam / .wav / .zip
     juce::File lastFileFolder;
 
     // ---- standalone-app helpers (also harmless inside a DAW) ----
     bool isStandalone() const { return wrapperType == wrapperType_Standalone; }
     std::atomic<float> hostlessBpm { 120.0f };   // tempo used when the host gives none (standalone app)
+    std::atomic<bool> hostHasTempo { false };
+
+    // ---- delay helpers ----
+    float tapDelay (int slot);                   // returns the tapped interval in ms (0 until two taps)
+    void setTwist (int slot, bool on) { engine.sendCommand (slot, on ? 1 : 2); }
+    bool getTrails() const { return engine.trails.load(); }
+    void setTrails (bool on);                    // delays / reverbs keep ringing after bypass
     std::atomic<bool> metronomeOn { false };
     std::atomic<float> metronomeVol { 0.5f };
     std::atomic<bool> tunerOn { false };
@@ -98,10 +108,12 @@ private:
     void setParamValue (juce::RangedAudioParameter* p, float normalised);
     void setSlotPath (int slot, const juce::String& path);
     void migrateOldState (int fromVersion);
+    void migrateSlot (int slot, int fromVersion);
     void clearSlotResource (int slot);
     void reloadResourcesFromState();
     std::shared_ptr<const oc::Resource> loadIr (const juce::File& f, juce::String& error);
     juce::String slotError[oc::kNumSlots];
+    juce::Array<double> tapTimes[oc::kNumSlots];
     juce::AudioFormatManager formats;
 
     int currentProgram = 0;

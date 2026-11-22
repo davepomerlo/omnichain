@@ -24,7 +24,9 @@ static const char* const kVibeModes[]  = { "Chorus", "Vibrato" };
 static const char* const kRotSpeed[]   = { "Slow", "Fast", "Brake" };
 static const char* const kRingShapes[] = { "Sine", "Triangle", "Square" };
 static const char* const kDelaySync[]  = { "Off", "1/1", "1/2", "1/2D", "1/4", "1/4D", "1/4T", "1/8", "1/8D", "1/8T", "1/16", "1/16T", "1/32" };
-static const char* const kDelayModes[] = { "Digital", "Analog", "Tape", "Ping-Pong", "Reverse" };
+// append-only: saved projects store the index
+static const char* const kDelayModes[] = { "Digital", "Analog", "Tape", "Ping-Pong", "Reverse", "Digital Mod", "Dynamic", "Crystal",
+                                           "Shimmer", "Lo-Fi", "Warm", "Multi-Head", "Echo + Verb", "Warp", "Glitch" };
 static const char* const kGlitchDiv[]  = { "1/4", "1/8", "1/8T", "1/16", "1/16T", "1/32" };
 static const char* const kWahMode[]    = { "Pedal", "Auto", "LFO", "Sync 1/4", "Sync 1/8", "Sync 1/16" };
 static const char* const kWahModel[]   = { "Cry Baby", "Vox", "Wide", "Bass" };
@@ -154,9 +156,9 @@ static const EffectInfo kInfos[NumEffectTypes] =
       { P ("Shift", -24, 24, 12, Int, "st"), P ("Fine", -100, 100, 0, Lin, "ct"), P ("Voice 2", -24, 24, -12, Int, "st"),
         P ("V2 Level", 0, 100, 0, Lin, "%"), P ("Window", 10, 100, 40, Log, "ms"), P ("Feedback", 0, 90, 0, Lin, "%") } },
 
-    { FxDelay, "Delay", "DELAY", CatTime, 0.35f, "Digital, analog, tape, ping-pong and reverse delay, host-syncable.",
-      { P ("Time", 1, 2000, 375, Log, "ms"), C ("Sync", kDelaySync, 0), P ("Feedback", 0, 110, 35, Lin, "%"),
-        P ("Tone", 500, 20000, 6000, Log, "Hz"), C ("Mode", kDelayModes, 0), P ("Mod", 0, 100, 15, Lin, "%"),
+    { FxDelay, "Delay", "DELAY", CatTime, 0.35f, "15 pedal-style echo types up to 10 s. Tap tempo, hold Twist to run away.",
+      { P ("Time", 1, 10000, 375, Log, "ms"), C ("Sync", kDelaySync, 0), P ("Feedback", 0, 110, 35, Lin, "%"),
+        P ("Tone", 500, 20000, 6000, Log, "Hz"), C ("Type", kDelayModes, 0), P ("Color", 0, 100, 15, Lin, "%"),
         P ("Ducking", 0, 100, 0, Lin, "%"), P ("Spread", 0, 100, 0, Lin, "%") } },
     { FxReverb, "Reverb", "VERB", CatTime, 0.3f, "8-line modulated FDN - room to infinite hall, with octave shimmer.",
       { P ("Size", 0, 100, 50, Lin, "%"), P ("Decay", 0.2f, 20, 2.5f, Log, "s"), P ("Damping", 0, 100, 40, Lin, "%"),

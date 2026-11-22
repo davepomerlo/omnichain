@@ -192,6 +192,8 @@ SlotCard::SlotCard (OmniChainProcessor& p, OmniChainPanel& e, int i) : proc (p),
     for (auto* b : { &loadBtn, &filePrev, &fileNext }) addChildComponent (*b);
     looperPanel = std::make_unique<LooperPanel> (proc, index);
     addChildComponent (*looperPanel);
+    delayBar = std::make_unique<DelayBar> (proc, index);
+    addChildComponent (*delayBar);
 
     for (auto* s : { &mix, &level })
     {
@@ -236,7 +238,8 @@ void SlotCard::rebuildForType (int type)
     blurb.setText (info.blurb, dontSendNotification);
     const bool empty = type == oc::FxNone;
     const bool usesFile = oc::typeUsesResource (type);
-    blurb.setVisible (! usesFile);
+    blurb.setVisible (! usesFile && type != oc::FxDelay);
+    delayBar->setVisible (type == oc::FxDelay);
     for (Component* c : { (Component*) &fileLabel, (Component*) &loadBtn, (Component*) &filePrev, (Component*) &fileNext }) c->setVisible (usesFile);
     shownFileText = "\x01";
     looperPanel->setVisible (type == oc::FxLooper);
@@ -305,6 +308,7 @@ void SlotCard::resized()
     {
         auto row = r.removeFromTop (22).reduced (2, 1);
         blurb.setBounds (row);
+        delayBar->setBounds (row);
         fileNext.setBounds (row.removeFromRight (20));
         filePrev.setBounds (row.removeFromRight (20));
         row.removeFromRight (3);
@@ -417,7 +421,7 @@ void SlotCard::itemDropped (const SourceDetails& d)
 bool SlotCard::isInterestedInFileDrag (const StringArray& files)
 {
     for (auto& f : files)
-        if (OmniChainProcessor::isIrFile (File (f)) || OmniChainProcessor::isNamFile (File (f)) || File (f).hasFileExtension ("ocslot")) return true;
+        if (OmniChainProcessor::isIrFile (File (f)) || OmniChainProcessor::isNamFile (File (f)) || File (f).hasFileExtension ("ocslot;zip")) return true;
     return false;
 }
 
@@ -427,6 +431,7 @@ void SlotCard::filesDropped (const StringArray& files, int, int)
     for (auto& f : files)
     {
         if (File (f).hasFileExtension ("ocslot")) { proc.loadSlotPatch (index, File (f)); break; }
+        if (File (f).hasFileExtension ("zip")) { importFiles ({ File (f) }); break; }
         if (OmniChainProcessor::isIrFile (File (f)) || OmniChainProcessor::isNamFile (File (f))) { proc.loadSlotFile (index, File (f)); break; }
     }
 }
@@ -453,7 +458,10 @@ void SlotCard::showLoadMenu()
     const bool nam = proc.getSlotType (index) == oc::FxNam;
     PopupMenu m;
     m.addItem (1, "Browse for your own file...");
+    m.addItem (3, "Import downloads (.nam / .wav / .zip, e.g. from TONE3000)...");
+    m.addItem (4, "Find more on TONE3000 (opens your browser)");
     const auto root = OmniChainProcessor::getLibraryFolder().getChildFile (nam ? "NAM" : "IR");
+    const auto mine = OmniChainProcessor::getContentFolder (nam);
     libraryFiles.clear();
     m.addSeparator();
     if (root.isDirectory())
@@ -462,13 +470,52 @@ void SlotCard::showLoadMenu()
         addLibraryFolder (m, root, nam, proc.getSlotFile (index));
     }
     else m.addItem (2, "Get the free factory library (opens the download page)");
+    if (mine.getNumberOfChildFiles (File::findFiles, nam ? "*.nam" : "*.wav;*.aif;*.aiff;*.flac") > 0
+        || mine.getNumberOfChildFiles (File::findDirectories) > 0)
+    {
+        m.addSectionHeader (nam ? "Your captures" : "Your IRs");
+        addLibraryFolder (m, mine, nam, proc.getSlotFile (index));
+    }
     SafePointer<SlotCard> safe (this);
-    m.showMenuAsync (PopupMenu::Options().withTargetComponent (&loadBtn), [safe] (int r)
+    m.showMenuAsync (PopupMenu::Options().withTargetComponent (&loadBtn), [safe, nam] (int r)
     {
         if (safe == nullptr || r == 0) return;
         if (r == 1) safe->openFileChooser();
         else if (r == 2) URL ("https://davepomerlo.github.io/omnichain/#library").launchInDefaultBrowser();
+        else if (r == 3) safe->openImportChooser();
+        else if (r == 4) URL (nam ? "https://www.tone3000.com/neural-amp-modeler" : "https://www.tone3000.com").launchInDefaultBrowser();
         else if (isPositiveAndBelow (r - 100, safe->libraryFiles.size())) safe->proc.loadSlotFile (safe->index, safe->libraryFiles[r - 100]);
+    });
+}
+
+void SlotCard::importFiles (const Array<File>& files)
+{
+    const bool nam = proc.getSlotType (index) == oc::FxNam || (proc.getSlotType (index) != oc::FxCabIR
+                     && std::any_of (files.begin(), files.end(), [] (const File& f) { return OmniChainProcessor::isNamFile (f) || f.hasFileExtension ("zip"); }));
+    auto added = OmniChainProcessor::importToneFiles (files, nam);
+    if (added.isEmpty() && ! nam) added = OmniChainProcessor::importToneFiles (files, true);
+    if (added.isEmpty())
+    {
+        AlertWindow::showMessageBoxAsync (MessageBoxIconType::InfoIcon, "Nothing to import",
+                                          "No .nam captures or .wav impulse responses were found in what you picked.", "OK", this);
+        return;
+    }
+    proc.loadSlotFile (index, added.getFirst());
+    AlertWindow::showMessageBoxAsync (MessageBoxIconType::InfoIcon, "Imported " + String (added.size()) + (added.size() == 1 ? " file" : " files"),
+                                      "Loaded \"" + added.getFirst().getFileName() + "\". The rest are in Load > "
+                                      + (OmniChainProcessor::isNamFile (added.getFirst()) ? "Your captures." : "Your IRs.")
+                                      + " Tip: lite / feather captures use a fraction of the CPU of standard ones.", "OK", this);
+}
+
+void SlotCard::openImportChooser()
+{
+    chooser = std::make_unique<FileChooser> ("Import captures or impulse responses", File::getSpecialLocation (File::userHomeDirectory).getChildFile ("Downloads"),
+                                             "*.nam;*.wav;*.aif;*.aiff;*.flac;*.zip");
+    SafePointer<SlotCard> safe (this);
+    chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::canSelectMultipleItems,
+                          [safe] (const FileChooser& fc)
+    {
+        if (safe != nullptr && ! fc.getResults().isEmpty()) safe->importFiles (fc.getResults());
     });
 }
 
@@ -627,6 +674,60 @@ void LooperPanel::resized()
     playBtn.setBounds (r.removeFromLeft (w)); r.removeFromLeft (5);
     undoBtn.setBounds (r.removeFromLeft (w)); r.removeFromLeft (5);
     clearBtn.setBounds (r);
+}
+
+// =====================================================================================
+DelayBar::DelayBar (OmniChainProcessor& p, int s) : proc (p), slot (s)
+{
+    addAndMakeVisible (tapBtn);
+    addAndMakeVisible (twistBtn);
+    tapBtn.setTooltip ("Tap two or more times. Free time: sets the delay time. Synced: sets the tempo (or the time, when your DAW owns the tempo).");
+    twistBtn.setTooltip ("Hold for a performance swell: repeats run away into oscillation, freeze (Reverse, Glitch, Ping-Pong) or bloom into a wash (Crystal, Shimmer, Echo + Verb, Warp). Release to let go.");
+    tapBtn.onClick = [this] { proc.tapDelay (slot); flash = 1.0f; };
+    twistBtn.onHold = [this] (bool down) { proc.setTwist (slot, down); };
+}
+
+void DelayBar::visibilityChanged()
+{
+    if (isVisible()) startTimerHz (15);
+    else { stopTimer(); proc.setTwist (slot, false); }
+}
+
+void DelayBar::timerCallback()
+{
+    const float ms = proc.engine.getSlotStatus (slot, 0), tw = proc.engine.getSlotStatus (slot, 1);
+    const auto& info = oc::getInfo (oc::FxDelay);
+    String txt;
+    if (auto* sp = proc.param (slot, "p2"))
+    {
+        const int si = roundToInt (oc::paramToReal (info.params[1], sp->getValue()));
+        if (si > 0) txt << oc::kSyncNames[si - 1] << "  ";
+    }
+    txt << (ms >= 1000.0f ? String (ms / 1000.0f, 2) + " s" : String (roundToInt (ms)) + " ms");
+    if (ms <= 0.0f) txt = {};
+    if (flash > 0.0f) flash = std::max (0.0f, flash - 0.2f);
+    if (txt != shownText || std::abs (tw - shownTw) > 0.02f || flash > 0.0f)
+    {
+        shownText = txt; shownTw = tw;
+        twistBtn.setColour (TextButton::buttonColourId, ocui::knobBody.interpolatedWith (Colour (0xffb36b1e), jlimit (0.0f, 1.0f, tw)));
+        tapBtn.setColour (TextButton::buttonColourId, ocui::knobBody.interpolatedWith (Colour (0xff4f7bd1), flash));
+        repaint();
+    }
+}
+
+void DelayBar::paint (Graphics& g)
+{
+    g.setColour (ocui::text);
+    g.setFont (Font (12.5f, Font::bold));
+    g.drawText (shownText, getLocalBounds().withTrimmedLeft (112).reduced (2, 0), Justification::centredRight);
+}
+
+void DelayBar::resized()
+{
+    auto r = getLocalBounds();
+    tapBtn.setBounds (r.removeFromLeft (48));
+    r.removeFromLeft (6);
+    twistBtn.setBounds (r.removeFromLeft (56));
 }
 
 // =====================================================================================
@@ -845,7 +946,7 @@ OmniChainPanel::OmniChainPanel (OmniChainProcessor& p) : proc (p)
     saveBtn.onClick = [this] { savePreset(); };
     loadBtn.onClick = [this] { showMoreMenu(); };
     saveBtn.setTooltip ("Save this sound by name (it appears in the preset list)");
-    loadBtn.setTooltip ("Rename, delete, import or export presets");
+    loadBtn.setTooltip ("Rename, delete, import or export presets; delay trails and NAM CPU settings");
     for (auto* b : { &prevBtn, &nextBtn, &saveBtn, &loadBtn }) addAndMakeVisible (*b);
     for (int pct : { 75, 90, 100, 115, 125, 150, 175, 200 }) sizeBox.addItem ("Size " + String (pct) + "%", pct);
     sizeBox.setTooltip ("Window size (you can also drag the bottom-right corner)");
@@ -967,6 +1068,9 @@ void OmniChainPanel::showMoreMenu()
     m.addItem (4, "Import preset file...");
     m.addItem (5, "Export this preset to a file...");
     m.addItem (6, "Open presets folder");
+    m.addSeparator();
+    m.addItem (9, "Delay & reverb trails after bypass", true, proc.getTrails());
+    m.addItem (10, "NAM: run A2 captures at their Lite size (less CPU)", true, OmniChainProcessor::getNamLight());
     SafePointer<OmniChainPanel> safe (this);
     m.showMenuAsync (PopupMenu::Options().withTargetComponent (&loadBtn), [safe] (int r)
     {
@@ -1020,6 +1124,8 @@ void OmniChainPanel::showMoreMenu()
                 });
                 break;
             case 6: OmniChainProcessor::getUserPresetFolder().startAsProcess(); break;
+            case 9: pr.setTrails (! pr.getTrails()); break;
+            case 10: pr.setNamLight (! OmniChainProcessor::getNamLight()); break;
             case 8:
                 if (cur.existsAsFile()) pr.loadPresetFile (cur);
                 else for (int i = 0; i < pr.getNumPrograms(); ++i) if (pr.getProgramName (i) == pr.currentPresetName) pr.setCurrentProgram (i);

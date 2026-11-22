@@ -316,6 +316,83 @@ int main (int argc, char** argv)
         snapshot (q, outDir + "/omnichain_v21.png");
     }
 
+    // 12. v2.2: pedal-style Delay. Old projects / effect patches keep their time and mode; tap tempo; trails setting
+    {
+        const auto& di = oc::getInfo (oc::FxDelay);
+        auto realOf = [&] (OmniChainProcessor& pr, int sl, int k) { return oc::paramToReal (di.params[k], pr.param (sl, "p" + String (k + 1))->getValue()); };
+        OmniChainProcessor a; a.setPlayConfigDetails (2, 2, sr, bs); a.prepareToPlay (sr, bs);
+        a.setSlotType (0, oc::FxDelay, true);
+        MemoryBlock mb; a.getStateInformation (mb);
+        auto tree = ValueTree::fromXml (*AudioProcessor::getXmlFromBinary (mb.getData(), (int) mb.getSize()));
+        tree.setProperty ("formatVersion", 2, nullptr);
+        for (int i = 0; i < tree.getNumChildren(); ++i)
+        {
+            auto c = tree.getChild (i); const auto id = c.getProperty ("id").toString();
+            if (id == "s1_p1") c.setProperty ("value", std::log (1200.0f) / std::log (2000.0f), nullptr);   // v2.1: 1200 ms on a 1..2000 ms knob
+            if (id == "s1_p5") c.setProperty ("value", 0.75f, nullptr);                                       // v2.1: Ping-Pong = 3 of 0..4
+        }
+        MemoryBlock old; AudioProcessor::copyXmlToBinary (*tree.createXml(), old);
+        OmniChainProcessor b; b.setPlayConfigDetails (2, 2, sr, bs); b.prepareToPlay (sr, bs);
+        b.setStateInformation (old.getData(), (int) old.getSize());
+        std::printf ("v2.1 delay -> %.1f ms (want 1200), type %.0f (want 3 Ping-Pong)\n", realOf (b, 0, 0), realOf (b, 0, 4));
+        CHECK (std::abs (realOf (b, 0, 0) - 1200.0f) < 1.0f && std::abs (realOf (b, 0, 4) - 3.0f) < 0.01f, "v2.1 delay migrated");
+
+        // a v2.1 effect patch
+        const auto patch = File::getSpecialLocation (File::tempDirectory).getChildFile ("old delay.ocslot");
+        patch.replaceWithText ("<OmniChainSlot formatVersion=\"2\" type=\"" + String (oc::FxDelay) + "\" typeName=\"Delay\" p1=\""
+                               + String (std::log (500.0f) / std::log (2000.0f)) + "\" p5=\"0.25\"/>");
+        CHECK (b.loadSlotPatch (2, patch) && std::abs (realOf (b, 2, 0) - 500.0f) < 1.0f && std::abs (realOf (b, 2, 4) - 1.0f) < 0.01f, "v2.1 delay patch migrated");
+        patch.deleteFile();
+
+        // tap tempo: free time -> delay time follows the taps
+        b.param (0, "p2")->setValueNotifyingHost (0.0f);
+        b.tapDelay (0); Thread::sleep (420); const float tapped = b.tapDelay (0);
+        std::printf ("tapped %.0f ms -> delay time %.0f ms\n", tapped, realOf (b, 0, 0));
+        CHECK (tapped > 380 && tapped < 520 && std::abs (realOf (b, 0, 0) - tapped) < 2.0f, "tap sets delay time");
+
+        // trails setting is saved with the project
+        b.setTrails (false);
+        MemoryBlock mt; b.getStateInformation (mt);
+        OmniChainProcessor c; c.setPlayConfigDetails (2, 2, sr, bs); c.prepareToPlay (sr, bs);
+        c.setStateInformation (mt.getData(), (int) mt.getSize());
+        CHECK (! c.getTrails() && a.getTrails(), "trails setting saved");
+
+        // every delay preset plays clean; snapshot the delay showcase
+        int n = 0;
+        for (int i = 0; i < b.getNumPrograms(); ++i)
+            if (b.getProgramName (i).startsWith ("Echo:"))
+            {
+                b.setCurrentProgram (i); b.engine.service(); bool fin = true; runAudio (b, 8, bs, 2, sr, fin); b.engine.service();
+                const float pk = runAudio (b, 120, bs, 2, sr, fin);
+                if (! fin || pk < 0.01f || pk > 4.0f) { std::printf ("  %s peak %.2f\n", b.getProgramName (i).toRawUTF8(), pk); ++failures; }
+                ++n;
+            }
+        std::printf ("%d echo presets play\n", n);
+        CHECK (n >= 12, "echo presets");
+        for (int i = 0; i < b.getNumPrograms(); ++i) if (b.getProgramName (i) == "Echo: Crystal Cathedral") b.setCurrentProgram (i);
+        b.engine.service(); bool fin = true; runAudio (b, 40, bs, 2, sr, fin); b.engine.service();
+        snapshot (b, outDir + "/omnichain_v22_delay.png");
+
+        // importing a downloaded .zip of captures: lands in your models folder, loads, and shows size + CPU
+        if (namPath.isNotEmpty())
+        {
+            const auto zipFile = File::getSpecialLocation (File::tempDirectory).getChildFile ("zz tone download.zip");
+            { ZipFile::Builder zb; zb.addFile (File (namPath), 9, "zz Some Amp/zz crunch.nam"); zb.addFile (File (namPath), 9, "__MACOSX/._zz crunch.nam");
+              zipFile.deleteFile(); FileOutputStream os (zipFile); zb.writeToStream (os, nullptr); }
+            const auto added = OmniChainProcessor::importToneFiles ({ zipFile }, true);
+            CHECK (added.size() == 1 && added[0].existsAsFile() && added[0].isAChildOf (OmniChainProcessor::getContentFolder (true)), "zip import");
+            if (added.size() == 1)
+            {
+                CHECK (b.loadSlotFile (5, added[0]), "imported capture loads");
+                int sev = 0; const auto txt = b.getSlotFileText (5, sev);
+                std::printf ("imported: %s\n", txt.toRawUTF8());
+                CHECK (txt.contains ("CPU"), "capture shows size and CPU");
+                added[0].getParentDirectory().deleteRecursively();
+            }
+            zipFile.deleteFile();
+        }
+    }
+
     std::printf ("\n%s (%d failures)\n", failures ? "FAILED" : "ALL HOST TESTS OK", failures);
     return failures ? 1 : 0;
 }

@@ -54,6 +54,7 @@ public:
     float takeInPeak()  { return inPeak.exchange (0.0f); }
     float takeOutPeak() { return outPeak.exchange (0.0f); }
     double getSampleRate() const { return sr; }
+    std::atomic<bool> trails { true };   // delays / reverbs ring out after bypass instead of being cut
 
 private:
     struct Slot
@@ -66,6 +67,7 @@ private:
         Smooth mix, lvl;
         float frozen[kParamsPerSlot] = {};
         bool wasIdle = true, snap = true;
+        bool tailLive = false; int tailQuiet = 0;   // trails: still ringing after bypass?
         std::atomic<float> meter { 0.0f };
         std::atomic<int> cmd { 0 };
         std::atomic<float> status[4] {};

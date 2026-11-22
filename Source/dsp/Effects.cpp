@@ -948,96 +948,6 @@ struct PitchFx final : Effect
 };
 
 // =====================================================================================
-struct DelayFx final : Effect
-{
-    DelayLine dl[2]; Smooth time; OnePole tone[2], hp[2]; float ph = 0, fph = 0, rph = 0; EnvFollower duckEnv; float duckG = 1;
-    void prepare (double s, int b) override
-    {
-        Effect::prepare (s, b);
-        for (auto& d : dl) d.init (int (3.1 * sr) + 256);
-        time.setTime (120.0f, sr); time.reset (0.375f * float (sr));
-        hp[0].setHz (90.0f, sr); hp[1].setHz (90.0f, sr);
-        duckEnv.setup (2.0f, 180.0f, sr);
-        reset();
-    }
-    void reset() override { for (auto& d : dl) d.clear(); tone[0].reset(); tone[1].reset(); hp[0].reset(); hp[1].reset(); rph = 0; duckEnv.reset(); duckG = 1; }
-    inline float loopFx (float y, int c, int mode)
-    {
-        y = tone[c].lp (y);
-        switch (mode)
-        {
-            case 1:  return fastTanh (y * 1.1f) * 0.909f;
-            case 2:  return fastTanh (hp[c].hp (y) * 1.4f) * 0.714f;
-            default: return fastTanh (y * 0.5f) * 2.0f;
-        }
-    }
-    void process (float* L, float* R, int n, const float* v, const Context& ctx) override
-    {
-        const int sync = (int) v[1], mode = (int) v[4];
-        float ms = v[0];
-        if (sync > 0) ms = kSyncBeats[sync - 1] * 60000.0f / float (ctx.bpm);
-        ms = clampf (ms, 1.0f, 2000.0f);
-        time.tgt = ms * 0.001f * float (sr);
-        const float fb = v[2] * 0.01f, mod = v[5] * 0.01f, duck = v[6] * 0.01f, spread = 1.0f + 0.5f * v[7] * 0.01f;
-        const float toneHz = mode == 1 ? v[3] * 0.6f : v[3];
-        tone[0].setHz (toneHz, sr); tone[1].setHz (toneHz, sr);
-        const float modMs = mode == 2 ? 2.5f : (mode == 1 ? 1.2f : 0.6f);
-        const float modS = mod * modMs * 0.001f * float (sr);
-        const float flS = mode == 2 ? mod * 0.00008f * float (sr) : 0.0f;
-        const float pinc = 0.5f / float (sr), finc = 6.5f / float (sr);
-        const float maxD = float (dl[0].size() - 8);
-        const float kDuck = 1.0f - onePoleCoef (15.0f, sr);
-        for (int i = 0; i < n; ++i)
-        {
-            ph += pinc; if (ph >= 1) ph -= 1;
-            fph += finc; if (fph >= 1) fph -= 1;
-            const float T = time.next();
-            const float d = clampf (T + modS * (fastSin2Pi (ph) + 1.0f) + flS * fastSin2Pi (fph), 2.0f, maxD);
-            if (duck > 0.0f)
-            {
-                const float e = duckEnv.tick (maxAbs (L[i], R[i]));
-                const float tg = 1.0f - duck * clampf ((gainToDb (e) + 45.0f) / 30.0f, 0.0f, 1.0f);   // echoes step back while you play
-                duckG += (tg - duckG) * kDuck;
-            }
-            else duckG = 1.0f;
-            if (mode == 3)
-            {
-                const float in = (L[i] + R[i]) * 0.5f;
-                const float yl = dl[0].read (d), yr = dl[1].read (d);
-                dl[0].push (in + fb * loopFx (yr, 0, 0));
-                dl[1].push (fb * loopFx (yl, 1, 0));
-                L[i] = yl * duckG; R[i] = yr * duckG;
-            }
-            else if (mode == 4)
-            {
-                const float W = std::max (T, 64.0f);
-                rph += 2.0f / W; rph -= std::floor (rph);
-                float p2 = rph + 0.5f; if (p2 >= 1) p2 -= 1;
-                const float w1 = fastSin2Pi (rph * 0.5f), w2 = fastSin2Pi (p2 * 0.5f);
-                float* ch[2] = { L, R };
-                for (int c = 0; c < 2; ++c)
-                {
-                    const float y = dl[c].read (2.0f + rph * W) * w1 * w1 + dl[c].read (2.0f + p2 * W) * w2 * w2;
-                    dl[c].push (ch[c][i] + fb * loopFx (y, c, 0));
-                    ch[c][i] = y * duckG;
-                }
-            }
-            else
-            {
-                float* ch[2] = { L, R };
-                for (int c = 0; c < 2; ++c)
-                {
-                    const float y = dl[c].read (c == 1 ? std::min (d * spread, maxD) : d);
-                    dl[c].push (ch[c][i] + fb * loopFx (y, c, mode));
-                    ch[c][i] = y * duckG;
-                }
-            }
-        }
-        meter = 1.0f - duckG;
-    }
-};
-
-// =====================================================================================
 struct SchroederAP
 {
     DelayLine dl; int d = 1; float g = 0.6f;
@@ -1045,8 +955,318 @@ struct SchroederAP
     inline float tick (float x) { const float z = dl.at (d - 1); const float w = x + g * z; dl.push (w); return z - g * w; }
 };
 
+// =====================================================================================
+// Echo engine voiced after flagship delay pedals (TC Flashback 2 X4, BOSS DD-8): 15 types, up to 10 s,
+// tap tempo and a hold-to-Twist performance button from the UI, carry-over trails handled by the engine.
+// Everything runs sample by sample with no look-ahead, so it adds no latency.
+struct DelayFx final : Effect
+{
+    enum { Digital, Analog, Tape, PingPong, Reverse, DigMod, Dynamic, Crystal, Shimmer, LoFi, Warm, MultiHead, EchoVerb, Warp, Glitch, NumTypes };
+
+    DelayLine dl[2];
+    int valid = 0;                         // samples written since reset: older buffer content reads as silence (no 10 s clear)
+    Smooth glide;                          // analog / tape family: time changes bend the pitch like a real tape or BBD
+    float curD = 0, prevD = 0, xf = 1;     // digital family: time changes crossfade without clicks or pitch bends
+    bool fresh = true; int lastType = -1;
+    OnePole tone[2], tone2[2], hp[2];
+    float ph = 0, fph = 0, cph = 0, rph = 0;
+    EnvFollower duckEnv; float duckG = 1;
+    GrainShifter shift[2];
+    SchroederAP apLoop[2][4], apOut[2][2];
+    float twist = 0; bool twistOn = false;
+    float crushPh[2] = {}, crushHold[2] = {}, lfInc = 0.3f, lfQ = 256.0f;
+    Rng rng { 0x51ED2701u };
+    float drift = 0, driftTgt = 0; int driftCount = 0;
+    int gPos = 0, gLen = 1, gKind = 0; float gD0 = 0;      // glitch segment state
+
+    DelayFx() { tails = true; }
+
+    void prepare (double s, int b) override
+    {
+        Effect::prepare (s, b);
+        for (auto& d : dl) d.init (int (10.0 * sr) + 4096);
+        glide.setTime (180.0f, sr);
+        duckEnv.setup (2.0f, 180.0f, sr);
+        for (auto& g : shift) g.init (int (0.07 * sr));
+        static const float lms[4] = { 7.3f, 11.9f, 17.1f, 23.7f }, oms[2] = { 3.1f, 5.3f };
+        for (int c = 0; c < 2; ++c)
+        {
+            for (int k = 0; k < 4; ++k) { apLoop[c][k].init (int (lms[k] * (c ? 1.09f : 1.0f) * 0.001f * float (sr))); apLoop[c][k].g = 0.62f; }
+            for (int k = 0; k < 2; ++k) { apOut[c][k].init (int (oms[k] * (c ? 1.13f : 1.0f) * 0.001f * float (sr))); apOut[c][k].g = 0.5f; }
+        }
+        reset();
+    }
+    void reset() override
+    {
+        valid = 0; fresh = true; xf = 1;
+        for (int c = 0; c < 2; ++c)
+        {
+            tone[c].reset(); tone2[c].reset(); hp[c].reset(); shift[c].clear();
+            for (auto& a : apLoop[c]) a.dl.clear();
+            for (auto& a : apOut[c]) a.dl.clear();
+            crushPh[c] = crushHold[c] = 0;
+        }
+        rph = 0; duckEnv.reset(); duckG = 1; twist = 0; twistOn = false; gPos = 0; gLen = 1; gKind = 0; drift = driftTgt = 0;
+    }
+    void command (int c) override { if (c == 1) twistOn = true; else if (c == 2) twistOn = false; }
+
+    inline float rd (int c, float d) const
+    {
+        if (d + 2.0f < float (valid)) return dl[c].readCubic (d);
+        return d + 1.0f <= float (valid) ? dl[c].read (d) : 0.0f;    // oldest fresh samples: don't touch stale ones
+    }
+
+    // what goes back into the delay line: tone, then the type's own colouring
+    inline float shape (float x, int c, int dt)
+    {
+        x = tone[c].lp (x);
+        switch (dt)
+        {
+            case Analog:    return fastTanh (x * 1.1f) * 0.909f;
+            case Tape:
+            case MultiHead: return fastTanh (hp[c].hp (x) * 1.4f) * 0.714f;
+            case Warm:      x = tone2[c].lp (x); return fastTanh (x * 0.8f) * 1.25f;
+            case LoFi:
+            {
+                x = hp[c].hp (x);
+                crushPh[c] += lfInc;
+                if (crushPh[c] >= 1.0f) { crushPh[c] -= std::floor (crushPh[c]); crushHold[c] = std::round (x * lfQ) / lfQ; }
+                return fastTanh (crushHold[c] * 1.6f) * 0.625f;
+            }
+            case Shimmer:
+            case EchoVerb:
+            case Warp:      return fastTanh (hp[c].hp (x) * 0.5f) * 2.0f;
+            default:        return fastTanh (x * 0.5f) * 2.0f;
+        }
+    }
+
+    void process (float* L, float* R, int n, const float* v, const Context& ctx) override
+    {
+        const int sync = (int) v[1];
+        const int dt = std::clamp ((int) v[4], 0, NumTypes - 1);
+        float ms = v[0];
+        if (sync > 0) ms = kSyncBeats[sync - 1] * 60000.0f / float (ctx.bpm);
+        ms = clampf (ms, 1.0f, 10000.0f);
+        const float maxD = float (dl[0].size() - 8);
+        const bool glideFam = dt == Analog || dt == Tape || dt == MultiHead || dt == Warp;
+        const bool freezeTw = dt == Reverse || dt == Glitch || dt == PingPong;
+        const bool washTw   = dt == Crystal || dt == Shimmer || dt == EchoVerb || dt == Warp;
+        const float fb = v[2] * 0.01f, ch = v[5] * 0.01f, spread = 1.0f + 0.5f * v[7] * 0.01f;
+        const float duck = dt == Dynamic ? 0.5f + 0.5f * v[6] * 0.01f : (dt == Warp ? std::max (v[6] * 0.01f, 0.4f * ch) : v[6] * 0.01f);
+
+        // twist: smoothed hold amount (0..1); it changes time on the tape/analog family, so look at last block's value
+        const float twBlock = twist;
+        float tgtS = std::min (ms * 0.001f * float (sr), maxD - 8.0f);
+        if (glideFam) tgtS *= (dt == Warp ? 1.0f + 0.3f * twBlock : 1.0f - 0.4f * twBlock);
+        tgtS = clampf (tgtS, 4.0f, maxD - 8.0f);
+        if (fresh || dt != lastType) { glide.reset (tgtS); curD = prevD = tgtS; xf = 1; fresh = false; }
+        lastType = dt;
+        glide.tgt = tgtS;
+        if (! glideFam && xf >= 1.0f)
+        {
+            if (std::fabs (tgtS - curD) > 2.0f) { prevD = curD; curD = tgtS; xf = 0; }
+            else curD = tgtS;
+        }
+
+        float toneHz = v[3];
+        switch (dt)
+        {
+            case Analog:    toneHz *= 0.6f * clampf (std::pow (300.0f / ms, 0.3f), 0.45f, 1.2f); break;   // a longer BBD clock is darker
+            case Tape:      toneHz *= 0.8f; break;
+            case MultiHead: toneHz *= 0.7f; break;
+            case Warm:      toneHz *= 0.55f; break;
+            case LoFi:      toneHz = std::min (toneHz, 3200.0f); break;
+            default: break;
+        }
+        const float hpHz = dt == LoFi ? 320.0f : ((dt == Tape || dt == MultiHead) ? 90.0f : 60.0f);
+        lfInc = lerp (16000.0f, 2800.0f, ch) / float (sr); lfQ = std::exp2 (lerp (12.0f, 5.0f, ch));
+        for (int c = 0; c < 2; ++c) { tone[c].setHz (toneHz, sr); tone2[c].a = tone[c].a; hp[c].setHz (hpHz, sr); }
+
+        float modMs = 0.0f, flMs = 0.0f, rate = 0.5f;
+        switch (dt)
+        {
+            case Digital: case PingPong: case Dynamic: modMs = ch * 0.6f; break;
+            case DigMod:   modMs = ch * 3.0f; rate = 0.9f; break;
+            case Analog:   modMs = ch * 1.2f; break;
+            case Tape:     modMs = ch * 2.5f; flMs = ch * 0.08f; break;
+            case MultiHead:modMs = 0.6f; flMs = 0.04f; break;
+            case Warp:     modMs = 1.0f + ch * 5.0f; rate = 0.23f; flMs = 0.05f; break;
+            case Crystal: case Shimmer: case EchoVerb: modMs = 0.35f; rate = 0.7f; break;
+            default: break;
+        }
+        const float modS = modMs * 0.001f * float (sr), flS = flMs * 0.001f * float (sr);
+        const float pinc = rate / float (sr), finc = 6.5f / float (sr), cinc = 0.37f / float (sr);
+        const float kDuck = 1.0f - onePoleCoef (15.0f, sr);
+        const float twUp = 1.0f - onePoleCoef (350.0f, sr), twDn = 1.0f - onePoleCoef (900.0f, sr);
+        const float xfInc = 1.0f / (0.035f * float (sr));
+        const float win = 0.06f * float (sr), fadeS = 0.0025f * float (sr);
+
+        for (int i = 0; i < n; ++i)
+        {
+            twist += ((twistOn ? 1.0f : 0.0f) - twist) * (twistOn ? twUp : twDn);
+            const float tw = twist;
+            ph += pinc; if (ph >= 1) ph -= 1;
+            fph += finc; if (fph >= 1) fph -= 1;
+            cph += cinc; if (cph >= 1) cph -= 1;
+            if (dt == Warp && --driftCount <= 0) { driftTgt = rng.bi(); driftCount = int (0.4 * sr); }
+            drift += (driftTgt - drift) * 0.00002f;
+
+            // effective feedback / input gain under Twist
+            float fbE = fb, inG = 1.0f, chE = ch;
+            if (tw > 1.0e-4f)
+            {
+                if (freezeTw)    { fbE = lerp (fb, 1.0f, tw); inG = 1.0f - tw; }
+                else if (washTw) { fbE = lerp (fb, 0.97f, tw); chE = lerp (ch, 1.0f, 0.8f * tw); }
+                else             fbE = lerp (fb, glideFam ? 1.06f : 1.0f, tw);
+            }
+
+            if (duck > 0.0f)
+            {
+                const float e = duckEnv.tick (maxAbs (L[i], R[i]));
+                const float tg = 1.0f - duck * clampf ((gainToDb (e) + 45.0f) / 30.0f, 0.0f, 1.0f);   // echoes step back while you play
+                duckG += (tg - duckG) * kDuck;
+            }
+            else duckG = 1.0f;
+
+            // base delay (samples) and the click-free crossfade between old and new times
+            const float base = glideFam ? glide.next() : curD;
+            float xa = 1.0f, xb = 0.0f;
+            if (! glideFam && xf < 1.0f) { xf = std::min (1.0f, xf + xfInc); xa = fastSin2Pi (xf * 0.25f); xb = fastSin2Pi (0.25f + xf * 0.25f); }
+            // read at base * mul + add samples; during a digital time change also read the old time and crossfade
+            auto tap = [&] (int c, float mul, float add) -> float
+            {
+                const float d = clampf (base * mul + add, 2.0f, maxD - 8.0f);
+                if (xb <= 1.0e-4f || glideFam) return rd (c, d);
+                return rd (c, d) * xa + rd (c, clampf (prevD * mul + add, 2.0f, maxD - 8.0f)) * xb;
+            };
+            float mo[2];
+            mo[0] = modS * (fastSin2Pi (ph) + 1.0f) + flS * fastSin2Pi (fph);
+            mo[1] = dt == DigMod ? modS * (fastSin2Pi (ph + 0.25f) + 1.0f) : mo[0];
+            if (dt == Warp) { const float dr = modS * (drift + 1.0f); mo[0] += dr; mo[1] += dr * 0.9f; }
+
+            const float inL = L[i] * inG, inR = R[i] * inG;
+            float outL, outR;
+
+            if (dt == PingPong)
+            {
+                const float yl = tap (0, 1.0f, mo[0]), yr = tap (1, 1.0f, mo[0]);
+                dl[0].push (shape ((inL + inR) * 0.5f + fbE * yr, 0, dt));
+                dl[1].push (shape (fbE * yl, 1, dt));
+                outL = yl; outR = yr;
+            }
+            else if (dt == Reverse)
+            {
+                const float W = std::max (base, 64.0f);
+                rph += 2.0f / W; rph -= std::floor (rph);
+                float p2 = rph + 0.5f; if (p2 >= 1) p2 -= 1;
+                const float w1 = fastSin2Pi (rph * 0.5f), w2 = fastSin2Pi (p2 * 0.5f);
+                const float in[2] = { inL, inR };
+                float y[2];
+                for (int c = 0; c < 2; ++c)
+                {
+                    y[c] = rd (c, 2.0f + rph * W) * w1 * w1 + rd (c, 2.0f + p2 * W) * w2 * w2;
+                    dl[c].push (shape (in[c] + fbE * y[c], c, dt));
+                }
+                outL = y[0]; outR = y[1];
+            }
+            else
+            {
+                const float in[2] = { inL, inR };
+                float y[2], o[2];
+                for (int c = 0; c < 2; ++c)
+                {
+                    const float mul = c == 1 ? spread : 1.0f;
+                    if (dt == MultiHead)
+                    {
+                        // three playback heads at 1/3, 2/3 and the full time; Color brings in the shorter ones
+                        const float h2 = clampf (chE * 2.0f, 0.0f, 1.0f), h1 = clampf (chE * 2.0f - 1.0f, 0.0f, 1.0f);
+                        y[c] = (tap (c, mul, mo[c]) + h2 * tap (c, mul * 0.6667f, mo[c]) + h1 * tap (c, mul * 0.3333f, mo[c])) / (1.0f + 0.55f * (h1 + h2));
+                    }
+                    else y[c] = tap (c, mul, mo[c]);
+
+                    float loop = y[c];
+                    o[c] = y[c];
+                    switch (dt)
+                    {
+                        case Crystal:
+                        {
+                            // repeats sparkle an octave up (shifted after the loop, so they don't run away upward)
+                            float s = shift[c].tick (y[c], 2.0f, win);
+                            for (auto& a : apOut[c]) s = a.tick (s);
+                            o[c] = y[c] * (1.0f - 0.35f * chE) + s * chE * 0.9f;
+                            break;
+                        }
+                        case Shimmer:
+                        {
+                            // octave shifter inside the loop: every repeat climbs, the tone control tames it
+                            float s = shift[c].tick (y[c], 2.0f, win);
+                            s = apLoop[c][0].tick (apLoop[c][1].tick (s));
+                            loop = y[c] * (1.0f - 0.5f * chE) + s * chE * 0.75f;
+                            break;
+                        }
+                        case EchoVerb:
+                        case Warp:
+                        {
+                            // diffusion inside the loop smears the repeats into a reverb wash
+                            float r = y[c];
+                            for (auto& a : apLoop[c]) r = a.tick (r);
+                            const float amt = dt == Warp ? 0.35f + 0.4f * chE : chE;
+                            loop = lerp (y[c], r, 0.6f * amt);
+                            float ro = r;
+                            for (auto& a : apOut[c]) ro = a.tick (ro);
+                            o[c] = lerp (y[c], ro * 1.15f, 0.7f * amt);
+                            break;
+                        }
+                        default: break;
+                    }
+                    dl[c].push (shape (in[c] + fbE * loop, c, dt));
+                }
+                outL = o[0]; outR = o[1];
+
+                if (dt == Glitch)
+                {
+                    // tempo-locked slices of the echo: stutter, reverse, octave up / down or gaps (Color = how often)
+                    if (gPos >= gLen)
+                    {
+                        gPos = 0; gLen = std::max (256, int (base * 0.25f)); gD0 = base;
+                        gKind = rng.uni() < 0.2f + 0.7f * chE ? 1 + int (rng.next() % 5u) : 0;
+                        if (gKind == 2 && gD0 + 2.0f * float (gLen) > maxD - 8.0f) gKind = 1;
+                    }
+                    if (gKind != 0)
+                    {
+                        const float t = float (gPos);
+                        float dg = gD0, w = clampf (std::min (t, float (gLen) - t) / fadeS, 0.0f, 1.0f);
+                        switch (gKind)
+                        {
+                            case 1: { const int sl = std::max (64, gLen / 4); const float ts = float (gPos % sl);
+                                      dg = gD0 + t - ts; w *= clampf (std::min (ts, float (sl) - ts) / (fadeS * 0.4f), 0.0f, 1.0f); break; }
+                            case 2: dg = gD0 + 2.0f * t; break;
+                            case 3: dg = std::max (4.0f, gD0 - t); break;
+                            case 4: dg = gD0 + 0.5f * t; break;
+                            default: break;
+                        }
+                        const float sL = gKind == 5 ? 0.0f : rd (0, dg), sR = gKind == 5 ? 0.0f : rd (1, std::min (dg * spread, maxD - 8.0f));
+                        outL += w * (sL - outL); outR += w * (sR - outR);
+                    }
+                    ++gPos;
+                }
+            }
+
+            valid = std::min (valid + 1, dl[0].size());
+            outL *= duckG; outR *= duckG;
+            if (tw > 0.01f) { outL = lerp (outL, fastTanh (outL), tw); outR = lerp (outR, fastTanh (outR), tw); }
+            L[i] = outL; R[i] = outR;
+        }
+        meter = std::max (1.0f - duckG, twist);
+        status[0] = (glideFam ? glide.cur : curD) * 1000.0f / float (sr);
+        status[1] = twist;
+        status[2] = float (dt);
+    }
+};
+
 struct ReverbFx final : Effect
 {
+    ReverbFx() { tails = true; }
     static constexpr int N = 8;
     DelayLine line[N], pre[2]; SchroederAP diff[2][4]; OnePole damp[N]; Smooth len[N];
     GrainShifter shim; float lph[N] = {}; float shimSig = 0; OnePole lcut[2];
@@ -1125,6 +1345,7 @@ struct ReverbFx final : Effect
 // =====================================================================================
 struct SpringFx final : Effect
 {
+    SpringFx() { tails = true; }
     static constexpr int K = 16;
     AllPass1 disp[2][K]; DelayLine loop[2]; OnePole tone[2], drip[2]; DcBlock dc[2]; float fb[2] = { 0, 0 };
     void prepare (double s, int b) override { Effect::prepare (s, b); for (int c = 0; c < 2; ++c) { loop[c].init (int (0.1 * sr)); dc[c].setup (sr); drip[c].setHz (1500.0f, sr); } reset(); }

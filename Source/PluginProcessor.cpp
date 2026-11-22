@@ -6,7 +6,7 @@ using namespace juce;
 
 static const char* const kSlotParamIds[] = { "type", "byp", "mix", "lvl", "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8" };
 constexpr int kNumSlotParamIds = 12;
-constexpr int kStateFormat = 2;   // 1 = v1.x (6 knobs per slot), 2 = v2.0 (8 knobs, longer Distortion mode list)
+constexpr int kStateFormat = 3;   // 1 = v1.x (6 knobs per slot), 2 = v2.0 (8 knobs, longer Distortion mode list), 3 = v2.2 (10 s Delay, 15 types)
 
 OmniChainProcessor::OmniChainProcessor()
     : AudioProcessor (BusesProperties().withInput ("Input", AudioChannelSet::stereo(), true)
@@ -109,6 +109,7 @@ void OmniChainProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
             ctx.playing = pos->getIsPlaying();
         }
     if (! hostTempo) ctx.bpm = jlimit (30.0, 300.0, (double) hostlessBpm.load());
+    hostHasTempo.store (hostTempo, std::memory_order_relaxed);
 
     float* L = buffer.getWritePointer (0);
     const bool tuning = tunerOn.load (std::memory_order_relaxed);
@@ -206,6 +207,7 @@ void OmniChainProcessor::getStateInformation (MemoryBlock& destData)
     state.setProperty ("formatVersion", kStateFormat, nullptr);
     state.setProperty ("bpm", hostlessBpm.load(), nullptr);
     state.setProperty ("metronomeVol", metronomeVol.load(), nullptr);
+    state.setProperty ("trails", engine.trails.load(), nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, destData);
 }
 
@@ -218,6 +220,7 @@ void OmniChainProcessor::setStateInformation (const void* data, int sizeInBytes)
             currentPresetName = apvts.state.getProperty ("presetName", "Custom").toString();
             hostlessBpm = (float) (double) apvts.state.getProperty ("bpm", 120.0);
             metronomeVol = (float) (double) apvts.state.getProperty ("metronomeVol", 0.5);
+            engine.trails = (bool) apvts.state.getProperty ("trails", true);
             migrateOldState ((int) apvts.state.getProperty ("formatVersion", 1));
             reloadResourcesFromState();
             markClean();
@@ -225,14 +228,20 @@ void OmniChainProcessor::setStateInformation (const void* data, int sizeInBytes)
         }
 }
 
-// Projects and presets saved by v1.x: give the two new knobs their defaults and re-map choice lists that grew.
+// Projects and presets saved by older versions: give new knobs their defaults and re-map ranges / choice lists that grew.
 void OmniChainProcessor::migrateOldState (int fromVersion)
 {
     if (fromVersion >= kStateFormat) return;
-    for (int s = 0; s < oc::kNumSlots; ++s)
+    for (int s = 0; s < oc::kNumSlots; ++s) migrateSlot (s, fromVersion);
+    apvts.state.setProperty ("formatVersion", kStateFormat, nullptr);
+}
+
+void OmniChainProcessor::migrateSlot (int s, int fromVersion)
+{
+    const int type = getSlotType (s);
+    const auto& info = oc::getInfo (type);
+    if (fromVersion < 2)
     {
-        const int type = getSlotType (s);
-        const auto& info = oc::getInfo (type);
         for (int k = 6; k < oc::kParamsPerSlot; ++k)
             setParamValue (param (s, "p" + String (k + 1)), info.params[k].name ? oc::paramToNorm (info.params[k], info.params[k].def) : 0.5f);
         if (type == oc::FxDistortion)   // Mode had 4 choices, now 6
@@ -242,7 +251,51 @@ void OmniChainProcessor::migrateOldState (int fromVersion)
             setParamValue (m, (float) oldIdx / 5.0f);
         }
     }
-    apvts.state.setProperty ("formatVersion", kStateFormat, nullptr);
+    if (fromVersion < 3 && type == oc::FxDelay)
+    {
+        // Time was 1..2000 ms (log), now 1..10000 ms; Type had 5 choices, now 15 (the first five kept their place)
+        auto* t = param (s, "p1");
+        const float ms = std::pow (2000.0f, jlimit (0.0f, 1.0f, t->getValue()));
+        setParamValue (t, oc::paramToNorm (info.params[0], ms));
+        auto* m = param (s, "p5");
+        const int oldIdx = roundToInt (m->getValue() * 4.0f);
+        setParamValue (m, oc::paramToNorm (info.params[4], (float) oldIdx));
+    }
+}
+
+// ------------------------------------------------------------------ delay tap tempo
+// Tap twice or more: free time -> the taps set the delay time; synced -> they set the tempo
+// (or, when the host owns the tempo, the delay switches to free time at tapped quarter x subdivision).
+float OmniChainProcessor::tapDelay (int slot)
+{
+    if (getSlotType (slot) != oc::FxDelay) return 0.0f;
+    const double now = Time::getMillisecondCounterHiRes();
+    auto& t = tapTimes[slot];
+    if (! t.isEmpty() && now - t.getLast() > 2500.0) t.clearQuick();
+    t.add (now);
+    while (t.size() > 5) t.remove (0);
+    if (t.size() < 2) return 0.0f;
+    const float ms = (float) ((t.getLast() - t.getFirst()) / (t.size() - 1));
+    const auto& info = oc::getInfo (oc::FxDelay);
+    auto* sync = param (slot, "p2");
+    auto* time = param (slot, "p1");
+    const int si = roundToInt (oc::paramToReal (info.params[1], sync->getValue()));
+    if (si <= 0)
+        setParamValue (time, oc::paramToNorm (info.params[0], jlimit (1.0f, 10000.0f, ms)));
+    else if (! hostHasTempo.load())
+        hostlessBpm = jlimit (30.0f, 300.0f, 60000.0f / ms);
+    else
+    {
+        setParamValue (time, oc::paramToNorm (info.params[0], jlimit (1.0f, 10000.0f, ms * oc::kSyncBeats[si - 1])));
+        setParamValue (sync, 0.0f);
+    }
+    return ms;
+}
+
+void OmniChainProcessor::setTrails (bool on)
+{
+    engine.trails = on;
+    apvts.state.setProperty ("trails", on, nullptr);
 }
 
 // ------------------------------------------------------------------ slot helpers
@@ -467,7 +520,7 @@ bool OmniChainProcessor::loadSlotFile (int slot, const File& f)
     String err;
     if (nam)
     {
-        auto r = oc::loadNamFile (f.getFullPathName().toStdString());
+        auto r = oc::loadNamFile (f.getFullPathName().toStdString(), getNamLight());
         res = r.resource; err = String (r.error);
     }
     else res = loadIr (f, err);
@@ -524,6 +577,12 @@ String OmniChainProcessor::getSlotFileText (int slot, int& severity)
         return getSlotType (slot) == oc::FxNam ? "No model loaded - click Load or drop a .nam file here"
                                                 : "No IR loaded - click Load or drop a .wav file here";
     String txt = String::fromUTF8 (res->name.c_str());
+    if (getSlotType (slot) == oc::FxNam && ! res->detail.empty())
+    {
+        // size class and what it really costs on this computer, so heavy captures are easy to spot
+        txt << "  |  " << String::fromUTF8 (res->detail.c_str()) << ", CPU " << String (jmax (1, roundToInt (res->cpuPct))) << "%";
+        if (res->cpuPct > 12.0f) { severity = 1; txt << " (heavy: try a lite / feather version)"; }
+    }
     const double sr = engine.getSampleRate();
     if (getSlotType (slot) == oc::FxNam && sr > 0 && std::abs (sr - res->sampleRate) > 1.0)
     {
@@ -627,6 +686,8 @@ bool OmniChainProcessor::loadSlotPatch (int slot, const File& f)
     setSlotType (slot, type, true);
     for (int j = 1; j < kNumSlotParamIds; ++j)
         if (x->hasAttribute (kSlotParamIds[j])) setParamValue (param (slot, kSlotParamIds[j]), (float) x->getDoubleAttribute (kSlotParamIds[j]));
+    const int ver = x->getIntAttribute ("formatVersion", 2);
+    if (ver < kStateFormat) migrateSlot (slot, std::max (2, ver));
     const auto res = x->getStringAttribute ("res");
     if (oc::typeUsesResource (type) && res.isNotEmpty()) loadSlotFile (slot, resolveLibraryFile (File (res)));
     return true;
@@ -661,6 +722,57 @@ void OmniChainProcessor::setUiScale (float s)
     if (std::abs ((float) (double) apvts.state.getProperty ("uiScale", 0.0) - s) < 0.001f) return;
     apvts.state.setProperty ("uiScale", s, nullptr);
     globalSettings().setValue ("uiScale", s);
+}
+
+// ------------------------------------------------------------------ NAM size / imports
+bool OmniChainProcessor::getNamLight() { return globalSettings().getBoolValue ("namLight", true); }
+
+void OmniChainProcessor::setNamLight (bool on)
+{
+    if (on == getNamLight()) return;
+    globalSettings().setValue ("namLight", on);
+    reloadResourcesFromState();      // A2 captures switch between their Lite and Full sizes
+}
+
+// Copy downloaded captures / IRs (loose files or the .zip a website gives you) into your own models folder.
+// Returns the files that were added; nothing is changed in the files themselves.
+Array<File> OmniChainProcessor::importToneFiles (const Array<File>& files, bool nam)
+{
+    Array<File> added;
+    const auto dest = getContentFolder (nam).getChildFile ("Imported");
+    dest.createDirectory();
+    auto wanted = [nam] (const String& name)
+    {
+        const auto ext = name.fromLastOccurrenceOf (".", false, false).toLowerCase();
+        return nam ? ext == "nam" : (ext == "wav" || ext == "aif" || ext == "aiff" || ext == "flac");
+    };
+    auto unique = [] (File f) { int n = 2; const auto base = f.getFileNameWithoutExtension(); while (f.exists()) f = f.getSiblingFile (base + " (" + String (n++) + ")" + f.getFileExtension()); return f; };
+    for (auto& f : files)
+    {
+        if (f.hasFileExtension ("zip"))
+        {
+            ZipFile zip (f);
+            const auto sub = dest.getChildFile (File::createLegalFileName (f.getFileNameWithoutExtension()));
+            for (int i = 0; i < zip.getNumEntries(); ++i)
+            {
+                const auto* e = zip.getEntry (i);
+                if (e == nullptr || e->isSymbolicLink || ! wanted (e->filename) || e->filename.contains ("__MACOSX")) continue;
+                std::unique_ptr<InputStream> in (zip.createStreamForEntry (i));
+                if (in == nullptr) continue;
+                sub.createDirectory();
+                auto out = unique (sub.getChildFile (File::createLegalFileName (e->filename.replaceCharacter ('\\', '/').fromLastOccurrenceOf ("/", false, false))));
+                FileOutputStream os (out);
+                if (os.openedOk() && os.writeFromInputStream (*in, -1) > 0) { os.flush(); added.add (out); }
+            }
+        }
+        else if (f.existsAsFile() && wanted (f.getFileName()))
+        {
+            if (f.isAChildOf (getContentFolder (nam))) { added.add (f); continue; }   // already in your folder
+            auto out = unique (dest.getChildFile (f.getFileName()));
+            if (f.copyFileTo (out)) added.add (out);
+        }
+    }
+    return added;
 }
 
 AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new OmniChainProcessor(); }

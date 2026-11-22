@@ -149,6 +149,7 @@ void Engine::swapRuntime (Slot& a, Slot& b)
     std::swap (a.mix, b.mix); std::swap (a.lvl, b.lvl);
     for (int k = 0; k < kParamsPerSlot; ++k) std::swap (a.frozen[k], b.frozen[k]);
     std::swap (a.wasIdle, b.wasIdle); std::swap (a.snap, b.snap);
+    std::swap (a.tailLive, b.tailLive); std::swap (a.tailQuiet, b.tailQuiet);
     const float m = a.meter.load(); a.meter.store (b.meter.load()); b.meter.store (m);
     for (int k = 0; k < 4; ++k) { const float t = a.status[k].load(); a.status[k].store (b.status[k].load()); b.status[k].store (t); }
 }
@@ -230,7 +231,11 @@ void Engine::processChunk (float* L, float* R, int n, const Context& ctx)
         for (int k = 0; k < 4; ++k) s.status[k].store (fx->status[k], std::memory_order_relaxed);
         if (fx->type == FxNone) { s.fade = fadeTgt; s.byp = bypTgt; s.meter.store (0.0f, std::memory_order_relaxed); continue; }
 
-        const bool idle = (s.fade <= 0.0f && fadeTgt <= 0.0f) || (s.byp >= 1.0f && bypassed);
+        // trails: a wet-only effect keeps running on silence after bypass until its tail has died away
+        const bool trailFx = fx->tails && trails.load (std::memory_order_relaxed);
+        if (! bypassed) { s.tailLive = true; s.tailQuiet = 0; }
+        else if (! trailFx) s.tailLive = false;
+        const bool idle = (s.fade <= 0.0f && fadeTgt <= 0.0f) || (s.byp >= 1.0f && bypassed && ! s.tailLive);
         if (idle) { s.wasIdle = true; s.meter.store (0.0f, std::memory_order_relaxed); if (! match) s.fade = 0.0f; continue; }
         if (s.wasIdle) { fx->reset(); s.wasIdle = false; s.snap = true; }
 
@@ -253,8 +258,21 @@ void Engine::processChunk (float* L, float* R, int n, const Context& ctx)
             s.snap = false;
         }
 
-        std::memcpy (wl, L, sizeof (float) * (size_t) n);
-        std::memcpy (wr, R, sizeof (float) * (size_t) n);
+        if (trailFx && (bypassed || s.byp > 0.0f))
+        {
+            // feed the effect a fading (then silent) input so its echoes / reverb carry on by themselves
+            float b = s.byp;
+            for (int i = 0; i < n; ++i)
+            {
+                b = b < bypTgt ? std::min (bypTgt, b + bypStep) : std::max (bypTgt, b - bypStep);
+                wl[i] = L[i] * (1.0f - b); wr[i] = R[i] * (1.0f - b);
+            }
+        }
+        else
+        {
+            std::memcpy (wl, L, sizeof (float) * (size_t) n);
+            std::memcpy (wr, R, sizeof (float) * (size_t) n);
+        }
         fx->process (wl, wr, n, s.frozen, ctx);
 
         // safety net: a misbehaving effect never reaches the speakers
@@ -265,17 +283,39 @@ void Engine::processChunk (float* L, float* R, int n, const Context& ctx)
             fx->reset();
             std::memcpy (wl, L, sizeof (float) * (size_t) n);
             std::memcpy (wr, R, sizeof (float) * (size_t) n);
+            if (trailFx) { std::memset (wl, 0, sizeof (float) * (size_t) n); std::memset (wr, 0, sizeof (float) * (size_t) n); }
         }
 
-        for (int i = 0; i < n; ++i)
+        if (trailFx)
         {
-            s.fade = s.fade < fadeTgt ? std::min (fadeTgt, s.fade + fadeStep) : std::max (fadeTgt, s.fade - fadeStep);
-            s.byp  = s.byp  < bypTgt  ? std::min (bypTgt,  s.byp  + bypStep)  : std::max (bypTgt,  s.byp  - bypStep);
-            const float m = s.mix.next() * s.fade * (1.0f - s.byp);
-            const float lv = s.lvl.next();
-            L[i] += m * (wl[i] * lv - L[i]);
-            R[i] += m * (wr[i] * lv - R[i]);
+            // wet-only effect: dry stays untouched as it is bypassed, the effect output keeps being added on top
+            float pkW = 0.0f;
+            for (int i = 0; i < n; ++i)
+            {
+                s.fade = s.fade < fadeTgt ? std::min (fadeTgt, s.fade + fadeStep) : std::max (fadeTgt, s.fade - fadeStep);
+                s.byp  = s.byp  < bypTgt  ? std::min (bypTgt,  s.byp  + bypStep)  : std::max (bypTgt,  s.byp  - bypStep);
+                const float mx = s.mix.next() * s.fade, a = 1.0f - s.byp;
+                const float lv = s.lvl.next();
+                L[i] = L[i] * (1.0f - mx * a) + mx * lv * wl[i];
+                R[i] = R[i] * (1.0f - mx * a) + mx * lv * wr[i];
+                pkW = std::max (pkW, std::max (std::fabs (wl[i]), std::fabs (wr[i])));
+            }
+            if (bypassed && s.byp >= 1.0f)
+            {
+                s.tailQuiet = pkW < 3.0e-5f ? s.tailQuiet + n : 0;
+                if (s.tailQuiet > int (0.3 * sr)) s.tailLive = false;
+            }
         }
+        else
+            for (int i = 0; i < n; ++i)
+            {
+                s.fade = s.fade < fadeTgt ? std::min (fadeTgt, s.fade + fadeStep) : std::max (fadeTgt, s.fade - fadeStep);
+                s.byp  = s.byp  < bypTgt  ? std::min (bypTgt,  s.byp  + bypStep)  : std::max (bypTgt,  s.byp  - bypStep);
+                const float m = s.mix.next() * s.fade * (1.0f - s.byp);
+                const float lv = s.lvl.next();
+                L[i] += m * (wl[i] * lv - L[i]);
+                R[i] += m * (wr[i] * lv - R[i]);
+            }
         s.meter.store (fx->meter, std::memory_order_relaxed);
         for (int k = 0; k < 4; ++k) s.status[k].store (fx->status[k], std::memory_order_relaxed);
     }

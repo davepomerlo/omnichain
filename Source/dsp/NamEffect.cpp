@@ -1,5 +1,7 @@
 #include "NamEffect.h"
 #include "NAM/get_dsp.h"
+#include "NAM/slimmable.h"
+#include <chrono>
 #include <fstream>
 
 namespace oc
@@ -11,7 +13,31 @@ struct NamResource final : Resource
     nlohmann::json config;
     bool hasLoudness = false;
     double loudness = 0.0;
+    double slimSize = 1.0;       // 0 = smallest size of a slimmable (A2) capture, 1 = full
 };
+
+void applySlim (nam::DSP& dsp, double size)
+{
+    if (auto* s = dynamic_cast<nam::SlimmableModel*> (&dsp)) s->SetSlimmableSize (size);
+}
+
+// Size class of a capture, read from its config (the names TONE3000 uses)
+std::string sizeClass (const nlohmann::json& j, bool slimmable, double slim)
+{
+    if (slimmable) return slim < 0.5 ? "A2 Lite" : "A2 Full";
+    try
+    {
+        const auto arch = j.value ("architecture", std::string());
+        if (arch == "WaveNet")
+        {
+            const int ch = j.at ("config").at ("layers").at (0).value ("channels", 0);
+            return ch >= 20 ? "large" : ch >= 16 ? "standard" : ch >= 12 ? "lite" : ch >= 8 ? "feather" : ch >= 1 ? "nano" : "WaveNet";
+        }
+        if (! arch.empty()) return arch;
+    }
+    catch (...) {}
+    return "custom";
+}
 
 std::filesystem::path pathFromUtf8 (const std::string& s)
 {
@@ -52,6 +78,7 @@ struct NamFx final : Effect
         {
             nam::DspLoadOptions o; o.prewarm = false;
             model = nam::get_dsp (r->config, o);
+            applySlim (*model, r->slimSize);
             model->ResetAndPrewarm (resample ? modelRate : sr, maxModel);
         }
         catch (...) { model.reset(); return; }
@@ -167,10 +194,11 @@ struct NamFx final : Effect
 };
 
 // Older captures carry no loudness figure, so measure one: RMS output for a standard -20 dBFS test burst.
-double measureLoudness (nam::DSP& dsp, double rate)
+double measureLoudness (nam::DSP& dsp, double rate, float& cpuPct)
 {
     const int bs = 512, total = (int) (rate * 0.7);
     dsp.ResetAndPrewarm (rate, bs);
+    double busy = 0.0, timed = 0.0;
     std::vector<float> a ((size_t) bs), b ((size_t) bs);
     Rng rng (12345u); OnePole lp; lp.setHz (2500.0f, rate); OnePole hp; hp.setHz (90.0f, rate);
     double e = 0; long cnt = 0;
@@ -184,14 +212,17 @@ double measureLoudness (nam::DSP& dsp, double rate)
             a[(size_t) i] = x * 0.62f;                                                    // about -20 dBFS RMS
         }
         float* ip = a.data(); float* op = b.data();
+        const auto t0 = std::chrono::steady_clock::now();
         dsp.process (&ip, &op, bs);
+        if (done > (int) (rate * 0.1)) { busy += std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count(); timed += bs / rate; }
         if (done > (int) (rate * 0.2)) for (int i = 0; i < bs; ++i) { e += (double) b[(size_t) i] * b[(size_t) i]; ++cnt; }
     }
+    cpuPct = timed > 0.0 ? (float) (100.0 * busy / timed) : 0.0f;
     return 10.0 * std::log10 (e / (double) std::max (1L, cnt) + 1.0e-12);
 }
 } // namespace
 
-ResourceLoadResult loadNamFile (const std::string& utf8Path)
+ResourceLoadResult loadNamFile (const std::string& utf8Path, bool light)
 {
     try
     {
@@ -206,9 +237,14 @@ ResourceLoadResult loadNamFile (const std::string& utf8Path)
         auto r = std::make_shared<NamResource>();
         r->sampleRate = dsp->GetExpectedSampleRate() > 0 ? dsp->GetExpectedSampleRate() : 48000.0;
         r->hasLoudness = true;
+        const bool slimmable = dynamic_cast<nam::SlimmableModel*> (dsp.get()) != nullptr;
+        r->slimSize = (slimmable && light) ? 0.0 : 1.0;
+        applySlim (*dsp, r->slimSize);
         // Always measure with the same test signal, so every capture lands at a similar volume
         // (loudness metadata in files is inconsistent between trainer versions, and older files have none).
-        r->loudness = measureLoudness (*dsp, r->sampleRate);
+        // The same run times the model, so the UI can show what it costs.
+        r->loudness = measureLoudness (*dsp, r->sampleRate, r->cpuPct);
+        r->detail = sizeClass (j, slimmable, r->slimSize);
         if (! std::isfinite (r->loudness) || r->loudness < -90.0) { r->hasLoudness = false; r->loudness = 0.0; }
         const auto u8 = fp.filename().u8string();
         r->name.assign (u8.begin(), u8.end());

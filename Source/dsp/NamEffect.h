@@ -12,5 +12,6 @@ struct ResourceLoadResult
 };
 
 // Parse and validate a .nam file (control thread). Path is UTF-8.
-ResourceLoadResult loadNamFile (const std::string& utf8Path);
+// light: captures that carry several sizes in one file (NAM A2 Full + Lite) run their smallest size.
+ResourceLoadResult loadNamFile (const std::string& utf8Path, bool light = true);
 } // namespace oc

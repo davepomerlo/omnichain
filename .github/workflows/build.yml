@@ -38,6 +38,12 @@ jobs:
           g++ -std=c++20 -O2 -DNAM_SAMPLE_FLOAT -I$N -IThirdParty/eigen -I$N/Dependencies/nlohmann \
               tests/EngineTest.cpp Source/dsp/*.cpp $(find $N/NAM -name '*.cpp') -o enginetest
           ./enginetest $N/example_models/wavenet.nam $N/example_models/lstm.nam
+      - name: Build and run delay test (timing per type, Twist, time changes, trails)
+        run: |
+          N=ThirdParty/NeuralAmpModelerCore
+          g++ -std=c++20 -O2 -DNAM_SAMPLE_FLOAT -I$N -IThirdParty/eigen -I$N/Dependencies/nlohmann \
+              tests/DelayTest.cpp Source/dsp/*.cpp $(find $N/NAM -name '*.cpp') -o delaytest
+          ./delaytest
 
   library:
     name: Factory library (NAM captures + IRs)

@@ -74,6 +74,32 @@ cp -r OmniChain.vst3 ~/.vst3/ && cp -r OmniChain.lv2 ~/.lv2/ && cp OmniChain.cla
 The standalone app (`OmniChain.exe` / `OmniChain.app` / `OmniChain`) lets you plug your guitar interface in and play with no DAW needed.
 Set the audio device under *Options → Audio/MIDI settings*.
 
+## New in 2.2
+
+* **Delay, rebuilt after the TC Flashback 2 X4 and the BOSS DD-8.** 15 echo types (original voicings inspired by those
+  pedals, not copies): **Digital**, **Analog** (longer times get darker, like a real bucket-brigade chip), **Tape**,
+  **Ping-Pong**, **Reverse**, **Digital Mod**, **Dynamic** (echoes duck while you play), **Crystal** (repeats sparkle an
+  octave up), **Shimmer** (every repeat climbs), **Lo-Fi**, **Warm**, **Multi-Head** (three tape heads), **Echo + Verb**,
+  **Warp** (drifting, blooming ambience) and **Glitch** (tempo-locked stutters, reverse and octave slices).
+  * Delay time now goes up to **10 seconds**.
+  * Changing the time on the digital types crossfades cleanly; the analog and tape types bend the pitch like the real thing.
+  * **Color** sets each type's character: modulation depth, shimmer amount, crush, reverb, heads or glitch density.
+  * **Tap** tempo on the slot: tap twice or more. With Sync off it sets the time; with Sync on it sets the tempo.
+  * **Twist** (hold): the repeats run away into oscillation, freeze (Reverse, Glitch, Ping-Pong) or bloom into a wash
+    (Crystal, Shimmer, Echo + Verb, Warp). Let go and they settle back.
+  * **Trails:** bypassing a Delay, Reverb or Spring Reverb lets the echoes ring out instead of cutting them.
+    Switch it off under **More → Delay & reverb trails after bypass**.
+  * 12 new **Echo:** presets show off the types. Old projects, presets and effect patches load exactly as before.
+  * Still zero latency, and every type uses under 1% of a CPU core.
+* **Lighter NAM captures:**
+  * Each NAM slot now shows the capture's size (nano, feather, lite, standard, or A2 Lite / Full) and **what it really
+    costs on your computer** (measured when it loads). Heavy ones turn yellow.
+  * **NAM A2 captures** (the newest TONE3000 format) hold a Full and a Lite model in one file. OmniChain runs the
+    **Lite** one by default to save CPU. Change it under **More → NAM: run A2 captures at their Lite size**.
+* **Easier TONE3000 downloads:** in a NAM or IR slot, **Load → Import downloads** takes `.nam`, `.wav` or the `.zip`
+  TONE3000 gives you. It copies them into your own folder and loads the first one. Everything you import shows up under
+  **Load → Your captures / Your IRs**. You can also drop a `.zip` straight onto a slot. **Load → Find more on TONE3000** opens the site.
+
 ## New in 2.1
 
 * **Resizable window** in every DAW and in the app: drag the bottom-right corner, or pick **Size** (75–200%) in the header.
@@ -120,7 +146,8 @@ voiced after classic cabinet styles, but they are not recordings of real cabinet
 
 **Where to get them free**
 * **TONE3000** (tone3000.com, formerly ToneHunt): the biggest free library, with hundreds of thousands of NAM captures and cab IRs.
-  It needs a free account. Click *Download* on a tone page and unzip.
+  It needs a free account. Click *Download* on a tone page, then use **Load → Import downloads** in OmniChain (no need to unzip).
+  To keep things light, pick the **lite**, **feather** or **nano** size of a capture, or an **A2** capture (OmniChain runs its Lite size).
 * Classic free cab IR packs: **God's Cab** (Wilkinson Audio), **Kalthallen Cabs**, the **Origin Effects IR Cab Library**,
   and the **Redwirez** free IR library.
 
@@ -136,7 +163,7 @@ voiced after classic cabinet styles, but they are not recordings of real cabinet
 * Most NAM captures are made at **48 kHz**. Set FL Studio to 48 kHz (*Options → Audio settings*) for the exact tone.
   The slot shows a yellow note if the rates differ.
 * **Normalize** (on by default) evens out the volume between captures. **Input** sets how hard you hit the model, like a guitar's volume knob.
-* NAM is the heaviest effect: about 1–10 % of a CPU core per capture, depending on its size. Everything else stays light.
+* NAM is the heaviest effect. The slot shows each capture's size and measured CPU. Feather and nano captures cost a small fraction of a standard one. Everything else stays light.
 * Projects and presets remember the file *locations*. If you move or rename the files, the slot shows "File not found". Click Load to point it at the new place.
 
 ## What improved in 2.0
@@ -211,7 +238,7 @@ expression pedal. Any other knob can be linked the same way, for example Freeze 
 | Filter & EQ | 5-band EQ, Envelope Filter (auto-wah), Ladder Filter + LFO, **Talk Box** (A-E-I-O-U formant morph) |
 | Modulation | Chorus (1–4 voices), Flanger (tempo sync), Phaser (2–12 stages), Tremolo / Pan (harmonic mode), Uni-Vibe, Rotary Speaker, Ring Mod |
 | Pitch | Octaver (-1 / -2 / +1), Pitch Shifter / Harmonizer (2 voices + feedback spiral) |
-| Time & Space | Delay (digital, analog, tape, ping-pong, **reverse**; host sync), Reverb (8-line FDN + **shimmer**), Spring Reverb |
+| Time & Space | **Delay** (15 pedal-style types up to 10 s, tap tempo, Twist, trails; host sync), Reverb (8-line FDN + **shimmer**), Spring Reverb |
 | Creative | Bitcrusher, **Glitch Grid** (tempo-locked stutter / reverse / tape-stop), **Granular Cloud** |
 | Utility | Stereo Imager (width, mono-bass, Haas, pan) |
 | New in 1.2 | **Wah Pedal** (Cry Baby, Vox, Wide, Bass; pedal, auto, LFO or tempo sweep), **Freeze Pad**, **Step Filter**, **Harmonic Arp**, **Sympathetic Strings**, **Spiral Delay**, **Ghost Verb**, **Amp Feedback** |
@@ -219,6 +246,7 @@ expression pedal. Any other knob can be linked the same way, for example Freeze 
 | New in 2.0: compressors | **FET 76** (with All-In mode), **Opto Leveler**, **Bus Compressor**, **Pedal Compressor**, **Tube Vari-Mu**, **Multiband** (3 bands, phase-aligned) |
 | New in 2.0: effects | **Looper** (45 s, overdub, half/double speed, reverse, bar-synced), **Frequency Shifter**, **Wavefolder**, **Hyper Unison**, **Glass Bells**, **Vinyl**, **Underwater**, **Exciter**, **Doubler**, **Acoustic Simulator** |
 | New in 2.1 | **Prism Shifter**, **Dream Loop**, **Microverse**, plus the redesigned **Looper** |
+| New in 2.2 | **Delay** rebuilt with 15 types (Flashback 2 X4 / DD-8 inspired), Tap, Twist and trails |
 | Loaders | **NAM Capture** (Neural Amp Modeler `.nam`), **Cab IR Loader** (`.wav/.aif/.flac`, zero-latency partitioned convolution) |
 
 ### About "zero latency"

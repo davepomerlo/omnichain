@@ -100,6 +100,8 @@ struct Resource
     virtual ~Resource() = default;
     std::string name;            // file name for display
     double sampleRate = 0.0;     // native rate of the IR / model (0 = unknown)
+    std::string detail;          // short description for the UI (NAM: size class and measured CPU)
+    float cpuPct = 0.0f;         // NAM: measured share of one CPU core
 };
 
 struct IrResource final : Resource
@@ -117,6 +119,7 @@ public:
     double sr = 48000.0;
     int maxBlock = 512;
     float meter = 0.0f;               // 0..1 activity / gain reduction for the UI
+    bool tails = false;               // output is wet-only and rings on: the engine can let it decay after bypass (trails)
     float status[4] = {};             // effect-specific read-outs for custom UIs (e.g. looper state / length / position)
     std::shared_ptr<const Resource> resource;   // set before prepare() for file-based effects
     uint32_t resVer = 0;

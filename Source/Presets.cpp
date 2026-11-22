@@ -397,6 +397,71 @@ const std::vector<PresetDef>& getFactoryPresets()
             { FxCompressor, 100, 0, { -22, 3, 10, 150, 3, 40, 20 } },
             { FxLooper, 100, 0, { 0, 100, 100, 1, 0, 0, 0, 1 } },
             { FxMicroverse, 45, 0, { 8, 0, 3, 50, 40, 35, 0, 30 } } } },
+
+        // ---- v2.2: pedal-style delays (Delay knobs: Time, Sync, Feedback, Tone, Type, Color, Ducking, Spread) ----
+        { "Echo: Studio Lead (Digital Mod)", {
+            { FxCompressor, 100, 0, { -24, 3, 10, 150, 3, 40, 20 } },
+            { FxOverdrive, 100, 0, { 25, 55, 720, 0, 20, -6 } },
+            { FxAmp, 100, 0, { 45, 5, 6, 6, 5.5f, 2, 5, 0 } },
+            { FxDelay, 28, 0, { D, 8, 35, 9000, 5, 30, 40, 40 } },
+            { FxReverb, 20, 0, { 50, 2, 45, 15, 30, 0, 120, 110 } } } },
+
+        { "Echo: Crystal Cathedral", {
+            { FxAmp, 100, 0, { 18, 5, 5, 6.5f, 6, 1, 5, 1 } },
+            { FxDelay, 35, 0, { D, 5, 45, 9000, 7, 70, 0, 50 } },
+            { FxReverb, 35, 0, { 85, 6, 35, 30, 50, 0, 150, 130 } } } },
+
+        { "Echo: Shimmer Ascension", {
+            { FxSwell, 100, 0, { -50, 500, 50, 9 } },
+            { FxDelay, 38, 0, { D, 4, 55, 7000, 8, 60, 0, 30 } },
+            { FxReverb, 30, 0, { 80, 5, 40, 20, 40, 0, 150, 120 } } } },
+
+        { "Echo: Multi-Head Dub", {
+            { FxAmp, 100, 0, { 30, 6, 5, 5, 5, 1, 5, 1 } },
+            { FxDelay, 35, 0, { D, 5, 55, 3500, 11, 100, 0, 20 } },
+            { FxSpring, 30, 0, { 2.5f, 3000, 60, 40, 40 } } } },
+
+        { "Echo: Rockabilly Slap", {
+            { FxCompressor, 100, 0, { -20, 3, 10, 150, 3, 40, 20 } },
+            { FxAmp, 100, 0, { 40, 5.5f, 6, 6.5f, 6, 4, 5, 0 } },
+            { FxDelay, 32, 0, { 110, 0, 8, 5000, 2, 20, 0, 0 } },
+            { FxSpring, 20, 0, { 1.8f, 3500, 50, 40, 30 } } } },
+
+        { "Echo: Lo-Fi Memory", {
+            { FxAmp, 100, 0, { 22, 5, 5, 5, 5, 1, 5, 1 } },
+            { FxDelay, 35, 0, { D, 7, 45, 3000, 9, 60, 20, 0 } },
+            { FxVinyl, 100, 0, { 30, 30, 45, 20, 25, 0 } } } },
+
+        { "Echo: Warp Bloom", {
+            { FxSwell, 100, 0, { -50, 700, 50, 9 } },
+            { FxDelay, 42, 0, { D, 4, 60, 6000, 13, 70, 30, 40 } },
+            { FxReverb, 30, 0, { 75, 4.5f, 40, 20, 50, 0, 150, 130 } } } },
+
+        { "Echo: Glitch Grid", {
+            { FxOverdrive, 100, 0, { 20, 55, 650, 0, 20, -6 } },
+            { FxAmp, 100, 0, { 35, 5, 6, 6, 5.5f, 2, 5, 0 } },
+            { FxDelay, 35, 0, { D, 4, 35, 8000, 14, 60, 0, 30 } } } },
+
+        { "Echo: Verb Wash Pad", {
+            { FxAmp, 100, 0, { 15, 5, 5, 6, 6, 1, 5, 1 } },
+            { FxChorus, 30, 0, { 0.4f, 40, 10, 2, 80, 12000 } },
+            { FxDelay, 38, 0, { D, 5, 50, 6500, 12, 70, 25, 40 } } } },
+
+        { "Echo: Dynamic Solo", {
+            { FxCompressor, 100, 0, { -24, 3, 10, 150, 3, 40, 20 } },
+            { FxDistortion, 100, 0, { 45, 55, 0, 0, 2, -15 } },
+            { FxAmp, 100, 0, { 40, 5, 6, 5.5f, 5, 2, 5, 0 } },
+            { FxDelay, 30, 0, { D, 4, 40, 7000, 6, 10, 60, 30 } } } },
+
+        { "Echo: Warm Ballad", {
+            { FxAmp, 100, 0, { 20, 5, 5, 6, 6, 1, 5, 1 } },
+            { FxDelay, 28, 0, { D, 4, 35, 8000, 10, 15, 30, 20 } },
+            { FxReverb, 22, 0, { 60, 2.5f, 50, 15, 30, 0, 120, 110 } } } },
+
+        { "Echo: Analog Long Throw", {
+            { FxOverdrive, 100, 0, { 15, 55, 700, 0, 20, -4 } },
+            { FxAmp, 100, 0, { 35, 5, 6, 6, 5.5f, 2, 5, 0 } },
+            { FxDelay, 30, 0, { 1200, 0, 55, 5000, 1, 25, 30, 25 } } } },
     };
     return presets;
 }
