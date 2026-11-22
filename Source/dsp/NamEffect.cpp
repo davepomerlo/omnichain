@@ -1,6 +1,13 @@
 #include "NamEffect.h"
 #include "NAM/get_dsp.h"
 #include "NAM/slimmable.h"
+#include "NAM/model_config.h"
+#include "NAM/wavenet/model.h"
+#include "NAM/lstm.h"
+#include "NAM/linear.h"
+#include "NAM/convnet.h"
+#include "NAM/container.h"
+#include "NAM/sequential.h"
 #include <chrono>
 #include <fstream>
 
@@ -8,6 +15,26 @@ namespace oc
 {
 namespace
 {
+// NAM core registers its model types with static objects. Inside a plugin those can be dropped by the linker
+// (the code looks unused), and then every capture fails with "No config parser registered". Registering them
+// here references that code directly, so it is always linked in, and fills in anything that is still missing.
+void ensureArchitectures()
+{
+    static const bool done = []
+    {
+        auto& reg = nam::ConfigParserRegistry::instance();
+        auto add = [&reg] (const char* name, nam::ConfigParserFunction f) { if (! reg.has (name)) reg.registerParser (name, std::move (f)); };
+        add ("WaveNet", nam::wavenet::create_config);
+        add ("LSTM", nam::lstm::create_config);
+        add ("Linear", nam::linear::create_config);
+        add ("ConvNet", nam::convnet::create_config);
+        add ("SlimmableContainer", nam::container::create_config);
+        add ("Sequential", nam::sequential::create_config);
+        return true;
+    }();
+    (void) done;
+}
+
 struct NamResource final : Resource
 {
     nlohmann::json config;
@@ -229,6 +256,7 @@ ResourceLoadResult loadNamFile (const std::string& utf8Path, bool light)
         const auto fp = pathFromUtf8 (utf8Path);
         std::ifstream f (fp, std::ios::binary);
         if (! f) return { nullptr, "Could not open the file." };
+        ensureArchitectures();
         nlohmann::json j = nlohmann::json::parse (f);
         nam::DspLoadOptions o; o.prewarm = false;
         auto dsp = nam::get_dsp (j, o);   // validates version and weights

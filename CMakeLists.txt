@@ -6,7 +6,7 @@ if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES)
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "" FORCE)
 endif()
 
-project(OmniChain VERSION 2.3.2 LANGUAGES C CXX)
+project(OmniChain VERSION 2.3.3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -21,7 +21,8 @@ add_subdirectory(${JUCE_PATH} JUCE)
 set(NAM_PATH   "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/NeuralAmpModelerCore" CACHE PATH "Path to NeuralAmpModelerCore")
 set(EIGEN_PATH "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/eigen" CACHE PATH "Path to Eigen")
 file(GLOB_RECURSE NAM_SOURCES CONFIGURE_DEPENDS "${NAM_PATH}/NAM/*.cpp")
-# OBJECT (not STATIC): NAM registers architectures via static initialisers that a static lib would drop
+# NAM registers architectures via static initialisers that a linker can drop inside the plugin (JUCE links the
+# plugin code as a static library); NamEffect.cpp registers them explicitly too, see ensureArchitectures()
 add_library(nam_core OBJECT ${NAM_SOURCES})
 target_include_directories(nam_core PUBLIC "${NAM_PATH}" "${EIGEN_PATH}" "${NAM_PATH}/Dependencies/nlohmann")
 target_compile_definitions(nam_core PUBLIC NAM_SAMPLE_FLOAT)
@@ -125,4 +126,12 @@ if(OMNICHAIN_TESTS)
     target_compile_definitions(OmniChainHostTest PRIVATE JucePlugin_Name="OmniChain"
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_ALSA=0 JUCE_JACK=0 JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_DISPLAY_SPLASH_SCREEN=0)
     target_link_libraries(OmniChainHostTest PRIVATE juce::juce_audio_utils nam_core juce::juce_recommended_config_flags)
+
+    # loads the real built VST3 like a DAW does and checks a NAM capture and an IR change the sound
+    juce_add_console_app(OmniChainPluginTest PRODUCT_NAME "OmniChainPluginTest")
+    juce_generate_juce_header(OmniChainPluginTest)
+    target_sources(OmniChainPluginTest PRIVATE tests/PluginLoadTest.cpp)
+    target_compile_definitions(OmniChainPluginTest PRIVATE JUCE_PLUGINHOST_VST3=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
+        JUCE_ALSA=0 JUCE_JACK=0 JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_DISPLAY_SPLASH_SCREEN=0)
+    target_link_libraries(OmniChainPluginTest PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)
 endif()

@@ -132,16 +132,25 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" == "Windows" ]; then
-            cmake -S . -B build -A x64
+            cmake -S . -B build -A x64 -DOMNICHAIN_TESTS=ON
           elif [ "$RUNNER_OS" == "Linux" ]; then
-            cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+            cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DOMNICHAIN_TESTS=ON
           else
-            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DOMNICHAIN_TESTS=ON
           fi
 
       - name: Build
         shell: bash
-        run: cmake --build build --config Release --parallel 4 --target ${{ matrix.targets }}
+        run: cmake --build build --config Release --parallel 4 --target ${{ matrix.targets }} OmniChainPluginTest
+
+      - name: Real plugin test (load the built VST3 like a DAW, play a NAM capture and a cab IR)
+        shell: bash
+        run: |
+          NAMF=$(find "OmniChain Library/NAM" -name '*.nam' | sort | head -1)
+          IRF=$(find "OmniChain Library/IR" -name '*.wav' | sort | head -1)
+          EXE=$(find build/OmniChainPluginTest_artefacts -type f \( -name OmniChainPluginTest -o -name OmniChainPluginTest.exe \) | head -1)
+          echo "test: $EXE | $NAMF | $IRF"
+          "$EXE" build/OmniChain_artefacts/Release/VST3/OmniChain.vst3 "$NAMF" "$IRF"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
