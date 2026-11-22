@@ -70,6 +70,10 @@ public:
     juce::String getSlotFileText (int slot, int& severity);     // severity: 0 ok, 1 warning, 2 error
     static juce::File getContentFolder (bool nam);
     static juce::File getLibraryFolder();                       // factory NAM captures + IRs ({} if not installed)
+    static juce::Array<juce::File> getLibrarySearchPlaces();
+    static bool installLibrary (const juce::File& zipOrFolder, juce::String& message, const juce::File& destParent = {});
+    static juce::File findLibraryZip();
+    void reloadMissingFiles();
     static juce::File resolveLibraryFile (const juce::File& saved);
     static bool getNamLight();                                  // run NAM A2 captures at their Lite size (less CPU)
     void setNamLight (bool on);

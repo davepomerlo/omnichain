@@ -142,6 +142,16 @@ Set the audio device under *Options → Audio/MIDI settings*.
 
 ## Factory library (new in 2.0)
 
+**Can't see the captures and IRs?** They're not effects in the effect list. Pick **NAM Capture** (or **Cab IR Loader**)
+in a slot, then click **Load**: the library is the menu that opens, sorted into folders.
+If that menu says **"Factory library: not found"**, OmniChain set it up for you from there (v2.3.1 and later):
+* **Install it now from OmniChain-...zip** appears when the download zip is in your Downloads or on your Desktop. One click unpacks it to Documents.
+* **I have it: pick the zip or the OmniChain Library folder** works wherever you saved it.
+* **Download it** gets `OmniChain-Library.zip` (10 MB). Then choose **Load** again.
+
+OmniChain also looks next to the plugin, in a OneDrive Documents folder, and in an unzipped download in Downloads or on the Desktop.
+**More → Open the factory library folder** shows where the one it uses is.
+
 OmniChain now comes with a free library: **58 NAM captures** (clean, crunch and high-gain amps, pedals,
 full rigs, power amps and a bass preamp) and **102 impulse responses** (13 cabinets with 5–7 mic positions each,
 spaces, acoustic bodies and oddities like telephone and megaphone).

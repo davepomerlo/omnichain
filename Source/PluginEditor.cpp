@@ -507,7 +507,14 @@ void SlotCard::showLoadMenu()
         m.addSectionHeader (nam ? "Factory library: amp and pedal captures" : "Factory library: impulse responses");
         addLibraryFolder (m, root, nam, proc.getSlotFile (index));
     }
-    else m.addItem (2, "Get the free factory library (opens the download page)");
+    else
+    {
+        m.addSectionHeader ("Factory library (58 captures + 102 IRs): not found");
+        libraryZip = OmniChainProcessor::findLibraryZip();
+        if (libraryZip.existsAsFile()) m.addItem (20, "Install it now from " + libraryZip.getFileName() + " (in your " + libraryZip.getParentDirectory().getFileName() + ")");
+        m.addItem (21, "I have it: pick the zip or the OmniChain Library folder...");
+        m.addItem (2, "Download it (OmniChain-Library.zip, 10 MB), then come back here");
+    }
     if (mine.getNumberOfChildFiles (File::findFiles, nam ? "*.nam" : "*.wav;*.aif;*.aiff;*.flac") > 0
         || mine.getNumberOfChildFiles (File::findDirectories) > 0)
     {
@@ -519,7 +526,9 @@ void SlotCard::showLoadMenu()
     {
         if (safe == nullptr || r == 0) return;
         if (r == 1) safe->openFileChooser();
-        else if (r == 2) URL ("https://davepomerlo.github.io/omnichain/#library").launchInDefaultBrowser();
+        else if (r == 2) URL ("https://github.com/davepomerlo/omnichain/releases/latest/download/OmniChain-Library.zip").launchInDefaultBrowser();
+        else if (r == 20) safe->installLibraryFrom (safe->libraryZip);
+        else if (r == 21) safe->pickLibrary();
         else if (r == 3) safe->openImportChooser();
         else if (r == 4) URL (nam ? "https://www.tone3000.com/neural-amp-modeler" : "https://www.tone3000.com").launchInDefaultBrowser();
         else if (r == 5) safe->importInbox();
@@ -545,6 +554,30 @@ void SlotCard::importFiles (const Array<File>& files)
                                       "Loaded \"" + added.getFirst().getFileName() + "\". The rest are in Load > "
                                       + (OmniChainProcessor::isNamFile (added.getFirst()) ? "Your captures." : "Your IRs.")
                                       + " Tip: lite / feather captures use a fraction of the CPU of standard ones.", "OK", this);
+}
+
+void SlotCard::installLibraryFrom (const File& src)
+{
+    String msg;
+    const bool ok = OmniChainProcessor::installLibrary (src, msg);
+    if (ok) proc.reloadMissingFiles();
+    AlertWindow::showMessageBoxAsync (ok ? MessageBoxIconType::InfoIcon : MessageBoxIconType::WarningIcon,
+                                      ok ? "Factory library ready" : "Library not installed",
+                                      ok ? msg + "\n\nClick Load again: the captures and IRs are in the menu, sorted into folders. The \"Library: ...\" presets work too."
+                                         : msg, "OK", this);
+    shownFileText = "\x01";
+}
+
+void SlotCard::pickLibrary()
+{
+    chooser = std::make_unique<FileChooser> ("Pick OmniChain-Library.zip, the OmniChain download zip, or the OmniChain Library folder",
+                                             File::getSpecialLocation (File::userHomeDirectory).getChildFile ("Downloads"), "*.zip");
+    SafePointer<SlotCard> safe (this);
+    chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::canSelectDirectories,
+                          [safe] (const FileChooser& fc)
+    {
+        if (safe != nullptr && fc.getResult() != File()) safe->installLibraryFrom (fc.getResult());
+    });
 }
 
 void SlotCard::importInbox()
@@ -1153,6 +1186,8 @@ void OmniChainPanel::showMoreMenu()
     m.addItem (9, "Delay & reverb trails after bypass", true, proc.getTrails());
     m.addItem (10, "NAM: run A2 captures at their Lite size (less CPU)", true, OmniChainProcessor::getNamLight());
     m.addItem (11, "Downloads folder to watch for captures: " + OmniChainProcessor::getInboxFolder().getFileName() + "...");
+    const auto lib = OmniChainProcessor::getLibraryFolder();
+    m.addItem (12, lib.isDirectory() ? "Open the factory library folder" : "Factory library not found: set it up from a NAM slot's Load menu", lib.isDirectory());
     SafePointer<OmniChainPanel> safe (this);
     m.showMenuAsync (PopupMenu::Options().withTargetComponent (&loadBtn), [safe] (int r)
     {
@@ -1208,6 +1243,7 @@ void OmniChainPanel::showMoreMenu()
             case 6: OmniChainProcessor::getUserPresetFolder().startAsProcess(); break;
             case 9: pr.setTrails (! pr.getTrails()); break;
             case 10: pr.setNamLight (! OmniChainProcessor::getNamLight()); break;
+            case 12: OmniChainProcessor::getLibraryFolder().startAsProcess(); break;
             case 11:
                 safe->chooser = std::make_unique<FileChooser> ("Folder where your browser saves downloads", OmniChainProcessor::getInboxFolder());
                 safe->chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectDirectories, [safe] (const FileChooser& fc)

@@ -106,6 +106,9 @@ public:
     void openImportChooser();
     void importFiles (const juce::Array<juce::File>& files);
     void importInbox();
+    void installLibraryFrom (const juce::File& src);
+    void pickLibrary();
+    juce::File libraryZip;
     void showLoadMenu();
     void addLibraryFolder (juce::PopupMenu&, const juce::File& dir, bool nam, const juce::File& current);
     juce::Array<juce::File> libraryFiles, slotPatchFiles;

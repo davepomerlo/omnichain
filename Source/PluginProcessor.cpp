@@ -1,5 +1,7 @@
 #include "PluginProcessor.h"
 #include <map>
+#include <mutex>
+static juce::PropertiesFile& globalSettings();
 #include "PluginEditor.h"
 #include "dsp/NamEffect.h"
 
@@ -498,23 +500,143 @@ void OmniChainProcessor::clearSlotResource (int slot)
 }
 
 // The factory library (NAM captures + IRs) can live in several places; the first one found wins.
-File OmniChainProcessor::getLibraryFolder()
+// After the library appears: retry slots that were waiting for it (a factory preset is simply loaded again)
+void OmniChainProcessor::reloadMissingFiles()
+{
+    bool missing = false;
+    for (int s = 0; s < oc::kNumSlots; ++s) missing |= slotError[s].isNotEmpty();
+    if (! missing) return;
+    for (int i = 0; i < getNumPrograms(); ++i)
+        if (getProgramName (i) == currentPresetName && ! isModified()) { setCurrentProgram (i); return; }
+    reloadResourcesFromState();
+}
+
+// A folder counts as the library when it holds the NAM and IR sub-folders.
+static bool looksLikeLibrary (const File& f) { return f.isDirectory() && (f.getChildFile ("NAM").isDirectory() || f.getChildFile ("IR").isDirectory()); }
+
+Array<File> OmniChainProcessor::getLibrarySearchPlaces()
 {
     const String name ("OmniChain Library");
     Array<File> c;
+    const File chosen (globalSettings().getValue ("libraryFolder"));
+    if (chosen.getFullPathName().isNotEmpty()) c.add (chosen);
+    const auto home = File::getSpecialLocation (File::userHomeDirectory);
     c.add (File::getSpecialLocation (File::userDocumentsDirectory).getChildFile (name));
-    c.add (File::getSpecialLocation (File::commonApplicationDataDirectory).getChildFile ("OmniChain").getChildFile (name));
+    c.add (home.getChildFile ("Documents").getChildFile (name));
+    // Windows 11 often keeps Documents inside OneDrive ("OneDrive" or "OneDrive - Company")
+    for (auto& od : home.findChildFiles (File::findDirectories, false, "OneDrive*"))
+        for (auto* sub : { "Documents", "Dokumente", "Documentos", "Documenti", "ドキュメント" })
+            c.add (od.getChildFile (sub).getChildFile (name));
+    c.add (File::getSpecialLocation (File::commonApplicationDataDirectory).getChildFile ("OmniChain").getChildFile (name));   // Windows installer
     c.add (File::getSpecialLocation (File::userApplicationDataDirectory).getChildFile ("OmniChain").getChildFile (name));
    #if JUCE_MAC
     c.add (File ("~/Library/Application Support/OmniChain").getChildFile (name));
     c.add (File ("/Library/Application Support/OmniChain").getChildFile (name));
    #endif
-    const auto exe = File::getSpecialLocation (File::currentExecutableFile);
-    c.add (exe.getSiblingFile (name));
-    c.add (exe.getParentDirectory().getParentDirectory().getChildFile ("Resources").getChildFile (name));
-    c.add (File::getSpecialLocation (File::currentApplicationFile).getSiblingFile (name));
-    for (auto& f : c) if (f.isDirectory()) return f;
+    // next to the app or plugin, up to a few folders above it (e.g. the unzipped download kept as it is)
+    for (auto start : { File::getSpecialLocation (File::currentExecutableFile), File::getSpecialLocation (File::currentApplicationFile) })
+    {
+        auto d = start.getParentDirectory();
+        for (int up = 0; up < 5 && d.getParentDirectory() != d; ++up, d = d.getParentDirectory())
+        {
+            c.add (d.getChildFile (name));
+            c.add (d.getChildFile ("Resources").getChildFile (name));
+        }
+    }
+    // an unzipped download left in Downloads or on the Desktop
+    for (auto* where : { "Downloads", "Desktop" })
+    {
+        const auto base = home.getChildFile (where);
+        c.add (base.getChildFile (name));
+        for (auto& sub : base.findChildFiles (File::findDirectories, false, "OmniChain*"))
+        {
+            c.add (sub.getChildFile (name));
+            for (auto& sub2 : sub.findChildFiles (File::findDirectories, false, "OmniChain*")) c.add (sub2.getChildFile (name));
+        }
+    }
+    return c;
+}
+
+static std::mutex libMutex;
+static File libCached;
+static uint32 libLastLook = 0;
+
+File OmniChainProcessor::getLibraryFolder()
+{
+    // remembered once found; looked for again at most every 2 s while missing
+    std::lock_guard<std::mutex> lock (libMutex);
+    auto& cached = libCached; auto& lastLook = libLastLook;
+    if (looksLikeLibrary (cached)) return cached;
+    const auto now = Time::getMillisecondCounter();
+    if (lastLook != 0 && now - lastLook < 2000) return {};
+    lastLook = now;
+    for (auto& f : getLibrarySearchPlaces()) if (looksLikeLibrary (f)) { cached = f; return f; }
+    cached = File();
     return {};
+}
+
+// Set up the library from a downloaded zip (OmniChain-Library.zip or a whole OmniChain download zip) or a folder.
+// A zip is unpacked into Documents/OmniChain Library; a folder is used where it is.
+bool OmniChainProcessor::installLibrary (const File& src, String& message, const File& destParent)
+{
+    const String name ("OmniChain Library");
+    if (src.isDirectory())
+    {
+        File lib = looksLikeLibrary (src) ? src : src.getChildFile (name);
+        if (! looksLikeLibrary (lib))
+            for (auto& d : src.findChildFiles (File::findDirectories, true, name)) if (looksLikeLibrary (d)) { lib = d; break; }
+        if (! looksLikeLibrary (lib)) { message = "That folder doesn't contain the OmniChain Library (it should hold NAM and IR folders)."; return false; }
+        globalSettings().setValue ("libraryFolder", lib.getFullPathName());
+        globalSettings().saveIfNeeded();
+        { std::lock_guard<std::mutex> lock (libMutex); libCached = lib; }
+        message = "Using the library in " + lib.getFullPathName();
+        return true;
+    }
+    if (! src.hasFileExtension ("zip")) { message = "Pick OmniChain-Library.zip (or the OmniChain download zip), or the unzipped OmniChain Library folder."; return false; }
+    ZipFile zip (src);
+    const auto dest = (destParent.isDirectory() ? destParent : File::getSpecialLocation (File::userDocumentsDirectory)).getChildFile (name);
+    int written = 0;
+    for (int i = 0; i < zip.getNumEntries(); ++i)
+    {
+        const auto* e = zip.getEntry (i);
+        if (e == nullptr || e->isSymbolicLink) continue;
+        const auto path = e->filename.replaceCharacter ('\\', '/');
+        const int at = path.indexOf (name + "/");
+        if (at < 0 || path.endsWithChar ('/') || path.contains ("__MACOSX")) continue;
+        const auto rel = path.substring (at + name.length() + 1);
+        if (rel.isEmpty() || rel.contains ("..")) continue;
+        const auto out = dest.getChildFile (rel);
+        out.getParentDirectory().createDirectory();
+        std::unique_ptr<InputStream> in (zip.createStreamForEntry (i));
+        if (in == nullptr) continue;
+        out.deleteFile();
+        FileOutputStream os (out);
+        if (os.openedOk() && os.writeFromInputStream (*in, -1) >= 0) { os.flush(); ++written; }
+    }
+    if (written == 0 || ! looksLikeLibrary (dest)) { message = "No OmniChain Library was found inside " + src.getFileName() + "."; return false; }
+    globalSettings().setValue ("libraryFolder", dest.getFullPathName());
+    globalSettings().saveIfNeeded();
+    { std::lock_guard<std::mutex> lock (libMutex); libCached = dest; }
+    message = "Installed " + String (written) + " files to " + dest.getFullPathName();
+    return true;
+}
+
+// A downloaded zip that holds the library, if one is lying in Downloads or on the Desktop
+File OmniChainProcessor::findLibraryZip()
+{
+    const auto home = File::getSpecialLocation (File::userHomeDirectory);
+    Array<File> zips;
+    for (auto* where : { "Downloads", "Desktop" })
+        zips.addArray (home.getChildFile (where).findChildFiles (File::findFiles, false, "OmniChain*.zip"));
+    File best;
+    for (auto& z : zips)
+    {
+        ZipFile zip (z);
+        bool has = false;
+        for (int i = 0; i < zip.getNumEntries() && ! has; ++i) if (auto* e = zip.getEntry (i)) has = e->filename.contains ("OmniChain Library/NAM/");
+        if (has && (best == File() || z.getLastModificationTime() > best.getLastModificationTime())) best = z;
+    }
+    return best;
 }
 
 // A path saved on another computer (or before the library moved) is re-found inside the local library.
@@ -618,8 +740,11 @@ String OmniChainProcessor::getSlotFileText (int slot, int& severity)
     if (slotError[slot].isNotEmpty()) { severity = 2; return slotError[slot]; }
     const auto res = engine.getSlotResource (slot);
     if (res == nullptr)
-        return getSlotType (slot) == oc::FxNam ? "No model loaded - click Load or drop a .nam file here"
-                                                : "No IR loaded - click Load or drop a .wav file here";
+    {
+        if (! getLibraryFolder().isDirectory()) { severity = 1; return "Factory library not found - click Load to set it up"; }
+        return getSlotType (slot) == oc::FxNam ? "No model loaded - click Load to pick one, or drop a .nam file here"
+                                                : "No IR loaded - click Load to pick one, or drop a .wav file here";
+    }
     String txt = String::fromUTF8 (res->name.c_str());
     if (getSlotType (slot) == oc::FxNam && ! res->detail.empty())
     {

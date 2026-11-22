@@ -446,6 +446,31 @@ int main (int argc, char** argv)
         inbox.deleteRecursively();
     }
 
+    // 14. v2.3.1: library setup from the downloaded zip when OmniChain can't find it
+    {
+        const auto lib = OmniChainProcessor::getLibraryFolder();
+        const auto tmp = File::getSpecialLocation (File::tempDirectory).getChildFile ("zz lib install");
+        tmp.deleteRecursively(); tmp.createDirectory();
+        // a zip laid out like the Windows download: OmniChain-Windows/OmniChain Library/...
+        const auto zipF = tmp.getChildFile ("OmniChain-Windows.zip");
+        { ZipFile::Builder zb; int n = 0;
+          for (auto& f : lib.findChildFiles (File::findFiles, true))
+              zb.addFile (f, 0, "OmniChain-Windows/OmniChain Library/" + f.getRelativePathFrom (lib).replaceCharacter ('\\', '/')), ++n;
+          if (namPath.isNotEmpty()) zb.addFile (File (namPath), 0, "OmniChain-Windows/OmniChain.vst3/dummy.bin");   // other things in the zip are ignored
+          FileOutputStream os (zipF); zb.writeToStream (os, nullptr); std::printf ("library zip with %d files\n", n); }
+        const auto dest = tmp.getChildFile ("Docs"); dest.createDirectory();
+        String msg;
+        const bool ok = OmniChainProcessor::installLibrary (zipF, msg, dest);
+        const int nNam = dest.getChildFile ("OmniChain Library").findChildFiles (File::findFiles, true, "*.nam").size();
+        const int nIr  = dest.getChildFile ("OmniChain Library").findChildFiles (File::findFiles, true, "*.wav").size();
+        std::printf ("%s -> %d captures, %d IRs\n", msg.toRawUTF8(), nNam, nIr);
+        CHECK (ok && nNam >= 58 && nIr >= 102, "library installs from the download zip");
+        CHECK (OmniChainProcessor::getLibraryFolder() == dest.getChildFile ("OmniChain Library"), "installed library is used");
+        String m2; CHECK (! OmniChainProcessor::installLibrary (tmp, m2) || OmniChainProcessor::getLibraryFolder().isDirectory(), "folder without a library is refused or found inside");
+        CHECK (OmniChainProcessor::installLibrary (lib, m2) && OmniChainProcessor::getLibraryFolder() == lib, "pick a library folder");
+        tmp.deleteRecursively();
+    }
+
     std::printf ("\n%s (%d failures)\n", failures ? "FAILED" : "ALL HOST TESTS OK", failures);
     return failures ? 1 : 0;
 }
