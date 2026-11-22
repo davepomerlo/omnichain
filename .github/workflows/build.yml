@@ -145,6 +145,7 @@ jobs:
 
       - name: Real plugin test (load the built VST3 like a DAW, play a NAM capture and a cab IR)
         shell: bash
+        timeout-minutes: 6
         run: |
           NAMF=$(find "OmniChain Library/NAM" -name '*.nam' | sort | head -1)
           IRF=$(find "OmniChain Library/IR" -name '*.wav' | sort | head -1)

@@ -4,10 +4,15 @@
 //   OmniChainPluginTest <path to OmniChain.vst3> <capture.nam> <cab.wav>
 #include <JuceHeader.h>
 #include "../Source/dsp/Effects.h"
+#include <atomic>
+#include <cstdlib>
+#include <thread>
 
 using namespace juce;
 
 static int failures = 0;
+static std::atomic<const char*> stage { "start" };
+static void step (const char* s) { stage = s; std::printf ("... %s\n", s); std::fflush (stdout); }
 #define CHECK(c, what) do { if (! (c)) { std::printf ("FAIL: %s\n", what); ++failures; } else std::printf ("ok: %s\n", what); } while (0)
 
 // Run audio through the plugin; returns the largest difference from the input and the output peak
@@ -39,12 +44,17 @@ static void run (AudioPluginInstance& p, int blocks, int bs, double sr, float& d
 
 int main (int argc, char** argv)
 {
+    std::setvbuf (stdout, nullptr, _IONBF, 0);
+    // never hang a build: give up after 3 minutes and say where it got stuck
+    std::thread ([] { std::this_thread::sleep_for (std::chrono::seconds (180)); std::printf ("TIMEOUT while: %s\n", stage.load()); std::fflush (stdout); std::_Exit (3); }).detach();
+    step ("initialising JUCE");
     ScopedJuceInitialiser_GUI juce;
     if (argc < 4) { std::printf ("usage: OmniChainPluginTest <OmniChain.vst3> <capture.nam> <cab.wav>\n"); return 2; }
     const String vst3 (argv[1]); const File nam (File::getCurrentWorkingDirectory().getChildFile (argv[2]));
     const File cab (File::getCurrentWorkingDirectory().getChildFile (argv[3]));
     CHECK (nam.existsAsFile() && cab.existsAsFile(), "test files exist");
 
+    step ("scanning the VST3");
     VST3PluginFormat fmt;
     OwnedArray<PluginDescription> descs;
     fmt.findAllTypesForFile (descs, File::getCurrentWorkingDirectory().getChildFile (vst3).getFullPathName());
@@ -52,11 +62,14 @@ int main (int argc, char** argv)
     if (descs.isEmpty()) return 1;
     const double sr = 48000.0; const int bs = 512;
     String err;
+    step ("creating the plugin instance");
     auto plugin = fmt.createInstanceFromDescription (*descs[0], sr, bs, err);
     CHECK (plugin != nullptr, "plugin instance");
     if (plugin == nullptr) { std::printf ("%s\n", err.toRawUTF8()); return 1; }
+    step ("preparing to play");
     plugin->setPlayConfigDetails (2, 2, sr, bs);
     plugin->prepareToPlay (sr, bs);
+    step ("processing audio");
 
     // empty chain passes the sound through unchanged (baseline)
     float diff = 0, peak = 0; bool fin = true;
@@ -68,6 +81,7 @@ int main (int argc, char** argv)
     auto chain = [&] (int slotType, const File& file)
     {
         // a VST3 hosted by JUCE saves <VST3PluginState><IComponent>base64 of the plugin's own state</IComponent>...
+        step ("reading the plugin state");
         MemoryBlock mb; plugin->getStateInformation (mb);
         auto outer = AudioProcessor::getXmlFromBinary (mb.getData(), (int) mb.getSize());
         if (outer == nullptr || outer->getChildByName ("IComponent") == nullptr) return false;
@@ -87,7 +101,9 @@ int main (int argc, char** argv)
         outer->getChildByName ("IComponent")->addTextElement (newInner.toBase64Encoding());
         if (auto* ec = outer->getChildByName ("IEditController")) outer->removeChildElement (ec, true);
         MemoryBlock out; AudioProcessor::copyXmlToBinary (*outer, out);
+        step ("restoring the project");
         plugin->setStateInformation (out.getData(), (int) out.getSize());
+        step ("letting the plugin load the file");
         for (int k = 0; k < 10; ++k) { MessageManager::getInstance()->runDispatchLoopUntil (30); run (*plugin, 2, bs, sr, diff, peak, fin); }
         return true;
     };
@@ -102,8 +118,11 @@ int main (int argc, char** argv)
     std::printf ("cab IR %s: max difference %.4f, peak %.3f\n", cab.getFileName().toRawUTF8(), diff, peak);
     CHECK (fin && diff > 0.01f && peak > 0.005f && peak < 8.0f, "cab IR changes the sound inside the real plugin");
 
+    std::printf ("\n%s (%d failures)\n", failures ? "FAILED" : "ALL PLUGIN TESTS OK", failures);
+    step ("closing the plugin");
     plugin->releaseResources();
     plugin.reset();
-    std::printf ("\n%s (%d failures)\n", failures ? "FAILED" : "ALL PLUGIN TESTS OK", failures);
-    return failures ? 1 : 0;
+    step ("done");
+    std::fflush (stdout);
+    std::_Exit (failures ? 1 : 0);      // results are in; don't let JUCE shutdown order decide the exit code
 }
