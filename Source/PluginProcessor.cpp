@@ -863,19 +863,21 @@ bool OmniChainProcessor::loadSlotPatch (int slot, const File& f)
 }
 
 // ------------------------------------------------------------------ window size
+// Settings shared by every OmniChain window on this computer.
+// Saved straight away on each change (no save timer), and deliberately never destroyed: a plugin's global
+// objects are torn down while Windows is closing the host process, and a timer there can deadlock the exit.
 static PropertiesFile& globalSettings()
 {
-    static std::unique_ptr<PropertiesFile> pf;
-    if (pf == nullptr)
+    static PropertiesFile* pf = []
     {
         PropertiesFile::Options o;
         o.applicationName = "OmniChain"; o.filenameSuffix = ".settings"; o.folderName = "OmniChain";
        #if JUCE_LINUX
         o.folderName = ".config/OmniChain";
        #endif
-        o.osxLibrarySubFolder = "Application Support"; o.millisecondsBeforeSaving = 500;
-        pf = std::make_unique<PropertiesFile> (o);
-    }
+        o.osxLibrarySubFolder = "Application Support"; o.millisecondsBeforeSaving = 0;
+        return new PropertiesFile (o);
+    }();
     return *pf;
 }
 
