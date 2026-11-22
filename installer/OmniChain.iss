@@ -23,6 +23,8 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\OmniChain.exe
+CloseApplications=yes
+SetupLogging=yes
 
 [Types]
 Name: "full"; Description: "Standalone app and DAW plugins"
@@ -53,3 +55,50 @@ Name: "{autodesktop}\OmniChain"; Filename: "{app}\OmniChain.exe"; Tasks: desktop
 
 [Run]
 Filename: "{app}\OmniChain.exe"; Description: "Start OmniChain now"; Flags: nowait postinstall skipifsilent; Components: app
+
+[Code]
+{ Windows error 183 ("already exists") happens when an older, hand-copied OmniChain left a FILE where the
+  installer needs a FOLDER (for example a single OmniChain.vst3 file copied out of the bundle), or a folder
+  where it needs a file. Clear those leftovers before copying. Only OmniChain's own paths are touched. }
+
+procedure NeedFolder(const P: String);
+begin
+  if FileExists(P) and not DirExists(P) then
+    if DeleteFile(P) then Log('Removed old file in the way of a folder: ' + P)
+    else Log('Could not remove ' + P);
+end;
+
+procedure NeedFile(const P: String);
+begin
+  if DirExists(P) then
+    if DelTree(P, True, True, True) then Log('Removed old folder in the way of a file: ' + P)
+    else Log('Could not remove ' + P);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Vst3: String;
+begin
+  Result := '';
+  NeedFolder(ExpandConstant('{app}'));
+  NeedFile(ExpandConstant('{app}\OmniChain.exe'));
+  NeedFolder(ExpandConstant('{commonappdata}\OmniChain'));
+  NeedFolder(ExpandConstant('{commonappdata}\OmniChain\OmniChain Library'));
+  if WizardIsComponentSelected('vst3') then
+  begin
+    Vst3 := ExpandConstant('{commoncf64}\VST3\OmniChain.vst3');
+    NeedFolder(ExpandConstant('{commoncf64}\VST3'));
+    NeedFolder(Vst3);
+    NeedFolder(Vst3 + '\Contents');
+    NeedFolder(Vst3 + '\Contents\x86_64-win');
+    NeedFolder(Vst3 + '\Contents\Resources');
+  end;
+  if WizardIsComponentSelected('clap') then
+  begin
+    NeedFolder(ExpandConstant('{commoncf64}\CLAP'));
+    NeedFile(ExpandConstant('{commoncf64}\CLAP\OmniChain.clap'));
+  end;
+  if FileExists(ExpandConstant('{commoncf64}\VST3\OmniChain.vst3')) then
+    Result := 'An old OmniChain.vst3 file in ' + ExpandConstant('{commoncf64}\VST3') + ' could not be replaced. ' +
+              'Close your DAW, delete that file, and run the installer again.';
+end;

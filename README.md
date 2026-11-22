@@ -49,6 +49,11 @@ or as the standalone app routed into Pro Tools.
    and `OmniChain.clap` to `C:\Program Files\Common Files\CLAP\` (create the folder if needed).
 3. Rescan plugins in your DAW. In FL Studio: **Options → Manage plugins → Find installed plugins**.
 
+
+**Installer error 183** ("cannot create a file when that file already exists"): an older, hand-copied OmniChain
+was in the way, usually a single `OmniChain.vst3` file in `C:\Program Files\Common Files\VST3`. Installers from
+v2.3.2 on clear that up by themselves. With an older installer, close your DAW, delete that `OmniChain.vst3` file
+(not a folder of the same name), and run the installer again.
 ### macOS
 1. Double-click the zip to extract it.
 2. Copy the files to these folders (in Finder use **Go → Go to Folder…**):

@@ -164,6 +164,28 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Get-Item "OmniChain-Windows-Setup.exe" | Format-List Name, Length
 
+      - name: Test the installer (old copies in the way, then an upgrade over the top)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vst = Join-Path $env:CommonProgramFiles "VST3"
+          New-Item -ItemType Directory -Force -Path $vst | Out-Null
+          Set-Content -Path (Join-Path $vst "OmniChain.vst3") -Value "old hand-copied single-file plugin"    # caused error 183
+          New-Item -ItemType Directory -Force -Path (Join-Path $env:ProgramData "OmniChain") | Out-Null
+          Set-Content -Path (Join-Path $env:ProgramData "OmniChain\OmniChain Library") -Value "stray file"
+          foreach ($run in 1, 2)
+          {
+            $p = Start-Process -FilePath ".\OmniChain-Windows-Setup.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=setup$run.log" -Wait -PassThru
+            if ($p.ExitCode -ne 0) { "setup run $run failed with exit code $($p.ExitCode)"; Get-Content "setup$run.log" -Tail 60; exit 1 }
+          }
+          $dll = Join-Path $vst "OmniChain.vst3\Contents\x86_64-win\OmniChain.vst3"
+          if (-not (Test-Path $dll -PathType Leaf)) { "VST3 bundle missing"; Get-Content setup1.log -Tail 60; exit 1 }
+          $nam = (Get-ChildItem -Recurse -Filter *.nam (Join-Path $env:ProgramData "OmniChain\OmniChain Library\NAM")).Count
+          $irs = (Get-ChildItem -Recurse -Filter *.wav (Join-Path $env:ProgramData "OmniChain\OmniChain Library\IR")).Count
+          "installed: VST3 bundle ok, $nam captures, $irs IRs"
+          if ($nam -lt 58 -or $irs -lt 102) { exit 1 }
+          Select-String -Path setup1.log -Pattern "Removed old" | ForEach-Object { $_.Line }
+
       - name: Sign, validate and package (macOS)
         if: runner.os == 'macOS'
         run: |
