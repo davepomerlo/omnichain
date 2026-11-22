@@ -82,6 +82,8 @@ uint32_t categoryColour (Category c);   // 0xRRGGBB
 float paramToReal (const ParamInfo& p, float norm);
 float paramToNorm (const ParamInfo& p, float real);
 std::string formatParam (const ParamInfo& p, float real);
+// Typed values: "375", "375 ms", "1.5 s", "6k", "-3 dB", "40%", or a choice name ("Tape", "1/8D"). false if not understood.
+bool parseParam (const ParamInfo& p, const std::string& text, float& real);
 inline std::string formatParamNorm (int type, int idx, float norm)
 {
     const auto& p = getInfo (type).params[idx];

@@ -113,6 +113,7 @@ Knob::Knob()
     slider.setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
     slider.setRotaryParameters (MathConstants<float>::pi * 1.25f, MathConstants<float>::pi * 2.75f, true);
     slider.setMouseDragSensitivity (180);
+    slider.setVelocityModeParameters (0.2, 1, 0.0, true, ModifierKeys::shiftModifier);   // hold Shift while dragging for fine moves
     slider.setPopupDisplayEnabled (true, false, nullptr);
     slider.onValueChange = [this] { value.setText (slider.getTextFromValue (slider.getValue()), dontSendNotification); };
     name.setJustificationType (Justification::centred);
@@ -122,7 +123,19 @@ Knob::Knob()
     value.setFont (Font (11.5f));
     name.setMinimumHorizontalScale (0.6f); value.setMinimumHorizontalScale (0.6f);
     name.setInterceptsMouseClicks (false, false);
-    value.setInterceptsMouseClicks (false, false);
+    value.setEditable (true, false, false);
+    value.setTooltip ("Click to type an exact value (units like ms, s, kHz, dB or % are understood)");
+    value.setColour (Label::textWhenEditingColourId, text);
+    value.setColour (Label::backgroundWhenEditingColourId, bg0);
+    value.setColour (Label::outlineWhenEditingColourId, track);
+    value.onTextChange = [this]
+    {
+        const auto t = value.getText().trim();
+        double v = slider.getValue();
+        const bool ok = parser ? parser (t, v) : (t.containsAnyOf ("0123456789") && (v = slider.getValueFromText (t), true));
+        if (ok) slider.setValue (v, sendNotificationSync);
+        value.setText (slider.getTextFromValue (slider.getValue()), dontSendNotification);
+    };
     addAndMakeVisible (slider); addAndMakeVisible (name); addAndMakeVisible (value);
 }
 
@@ -253,7 +266,15 @@ void SlotCard::rebuildForType (int type)
         kn.setAccent (accent);
         kn.slider.getProperties().set ("bipolar", pi.min < 0.0f && pi.max > 0.0f && std::abs (pi.min + pi.max) < 1.0e-3f);
         kn.slider.setDoubleClickReturnValue (true, oc::paramToNorm (pi, pi.def));
-        kn.slider.setTooltip (String (pi.name) + "  (double-click to reset)");
+        kn.slider.setTooltip (String (pi.name) + "  (Shift-drag for fine moves, double-click to reset, click the value below to type one)");
+        kn.parser = [type, k] (const String& t, double& out)
+        {
+            const auto& p2 = oc::getInfo (type).params[k];
+            float real = 0.0f;
+            if (! oc::parseParam (p2, t.toStdString(), real)) return false;
+            out = oc::paramToNorm (p2, real);
+            return true;
+        };
         kn.value.setText (kn.slider.getTextFromValue (kn.slider.getValue()), dontSendNotification);
         kn.slider.repaint();
     }
@@ -272,6 +293,14 @@ void SlotCard::refresh()
     if (t != shownType) rebuildForType (t);
     if (oc::typeUsesResource (t))
     {
+        const int waiting = editor.getNewDownloadCount();
+        if (waiting != shownInbox)
+        {
+            shownInbox = waiting;
+            loadBtn.setColour (TextButton::buttonColourId, waiting > 0 ? Colour (0xff3f6fd1) : ocui::knobBody);
+            loadBtn.setTooltip (waiting > 0 ? String (waiting) + " new download" + (waiting == 1 ? "" : "s") + " ready to import: click Load"
+                                            : "Pick from the factory library or your own files, browse TONE3000, or import downloads (you can also drag a file onto this slot)");
+        }
         int sev = 0;
         const auto txt = proc.getSlotFileText (index, sev);
         if (txt != shownFileText)
@@ -458,8 +487,17 @@ void SlotCard::showLoadMenu()
     const bool nam = proc.getSlotType (index) == oc::FxNam;
     PopupMenu m;
     m.addItem (1, "Browse for your own file...");
-    m.addItem (3, "Import downloads (.nam / .wav / .zip, e.g. from TONE3000)...");
-    m.addItem (4, "Find more on TONE3000 (opens your browser)");
+    editor.rescanDownloads();
+    const int waiting = editor.getNewDownloadCount();
+    m.addSectionHeader ("TONE3000: download by hand, play offline");
+    m.addItem (4, "Browse TONE3000 (opens your browser)");
+    if (waiting > 0)
+    {
+        m.addItem (5, "Import " + String (waiting) + " new download" + (waiting == 1 ? "" : "s") + " from " + OmniChainProcessor::getInboxFolder().getFileName());
+        m.addItem (7, "Ignore these downloads");
+    }
+    else m.addItem (5, "No new captures in " + OmniChainProcessor::getInboxFolder().getFileName() + " yet", false);
+    m.addItem (3, "Import files by hand (.nam / .wav / .zip)...");
     const auto root = OmniChainProcessor::getLibraryFolder().getChildFile (nam ? "NAM" : "IR");
     const auto mine = OmniChainProcessor::getContentFolder (nam);
     libraryFiles.clear();
@@ -484,6 +522,8 @@ void SlotCard::showLoadMenu()
         else if (r == 2) URL ("https://davepomerlo.github.io/omnichain/#library").launchInDefaultBrowser();
         else if (r == 3) safe->openImportChooser();
         else if (r == 4) URL (nam ? "https://www.tone3000.com/neural-amp-modeler" : "https://www.tone3000.com").launchInDefaultBrowser();
+        else if (r == 5) safe->importInbox();
+        else if (r == 7) { OmniChainProcessor::markDownloadsSeen (safe->editor.getNewDownloads()); safe->editor.rescanDownloads(); }
         else if (isPositiveAndBelow (r - 100, safe->libraryFiles.size())) safe->proc.loadSlotFile (safe->index, safe->libraryFiles[r - 100]);
     });
 }
@@ -505,6 +545,25 @@ void SlotCard::importFiles (const Array<File>& files)
                                       "Loaded \"" + added.getFirst().getFileName() + "\". The rest are in Load > "
                                       + (OmniChainProcessor::isNamFile (added.getFirst()) ? "Your captures." : "Your IRs.")
                                       + " Tip: lite / feather captures use a fraction of the CPU of standard ones.", "OK", this);
+}
+
+void SlotCard::importInbox()
+{
+    const auto files = editor.getNewDownloads();
+    const auto added = OmniChainProcessor::importDownloads (files);
+    editor.rescanDownloads();
+    if (added.isEmpty()) return;
+    // load the first file that suits this slot (a capture into a NAM slot, an IR into an IR slot)
+    const bool nam = proc.getSlotType (index) == oc::FxNam;
+    File pick = added.getFirst();
+    for (auto& f : added) if (nam ? OmniChainProcessor::isNamFile (f) : OmniChainProcessor::isIrFile (f)) { pick = f; break; }
+    proc.loadSlotFile (index, pick);
+    int nNam = 0; for (auto& f : added) if (OmniChainProcessor::isNamFile (f)) ++nNam;
+    String msg;
+    if (nNam > 0) msg << nNam << " capture" << (nNam == 1 ? "" : "s") << " in Load > Your captures. ";
+    if (added.size() - nNam > 0) msg << (added.size() - nNam) << " IR" << (added.size() - nNam == 1 ? "" : "s") << " in Load > Your IRs. ";
+    msg << "Loaded \"" << pick.getFileName() << "\". They're on your computer now, so they work offline. Your downloads were left where they are.";
+    AlertWindow::showMessageBoxAsync (MessageBoxIconType::InfoIcon, "Imported " + String (added.size()) + (added.size() == 1 ? " file" : " files"), msg, "OK", this);
 }
 
 void SlotCard::openImportChooser()
@@ -683,6 +742,23 @@ DelayBar::DelayBar (OmniChainProcessor& p, int s) : proc (p), slot (s)
     addAndMakeVisible (twistBtn);
     tapBtn.setTooltip ("Tap two or more times. Free time: sets the delay time. Synced: sets the tempo (or the time, when your DAW owns the tempo).");
     twistBtn.setTooltip ("Hold for a performance swell: repeats run away into oscillation, freeze (Reverse, Glitch, Ping-Pong) or bloom into a wash (Crystal, Shimmer, Echo + Verb, Warp). Release to let go.");
+    readout.setEditable (true, false, false);
+    readout.setJustificationType (Justification::centredRight);
+    readout.setFont (Font (12.5f, Font::bold));
+    readout.setColour (Label::textColourId, ocui::text);
+    readout.setColour (Label::textWhenEditingColourId, ocui::text);
+    readout.setColour (Label::backgroundWhenEditingColourId, ocui::bg0);
+    readout.setColour (Label::outlineWhenEditingColourId, ocui::track);
+    readout.setMinimumHorizontalScale (0.7f);
+    readout.setTooltip ("Click to type: a time (375, 375 ms, 1.25 s), a division (1/8D) or a tempo (92.5 bpm)");
+    readout.onEditorShow = [this] { if (auto* ed = readout.getCurrentTextEditor()) { ed->setJustification (Justification::centredRight); ed->setText ({}, false); } };
+    readout.onTextChange = [this]
+    {
+        if (! proc.setDelayFromText (slot, readout.getText()))
+            readout.setColour (Label::textColourId, Colour (0xffff6b6b));
+        shownText = "\x01";            // refresh on the next timer tick
+    };
+    addAndMakeVisible (readout);
     tapBtn.onClick = [this] { proc.tapDelay (slot); flash = 1.0f; };
     twistBtn.onHold = [this] (bool down) { proc.setTwist (slot, down); };
 }
@@ -695,19 +771,26 @@ void DelayBar::visibilityChanged()
 
 void DelayBar::timerCallback()
 {
+    if (readout.isBeingEdited()) return;
     const float ms = proc.engine.getSlotStatus (slot, 0), tw = proc.engine.getSlotStatus (slot, 1);
     const auto& info = oc::getInfo (oc::FxDelay);
     String txt;
     if (auto* sp = proc.param (slot, "p2"))
     {
         const int si = roundToInt (oc::paramToReal (info.params[1], sp->getValue()));
-        if (si > 0) txt << oc::kSyncNames[si - 1] << "  ";
+        if (si > 0)
+        {
+            const float bpm = proc.currentBpm.load();
+            const bool whole = std::abs (bpm - std::round (bpm)) < 0.005f;
+            txt << oc::kSyncNames[si - 1] << " @ " << (whole ? String (roundToInt (bpm)) : String (bpm, 2)) << " BPM = ";
+        }
     }
-    txt << (ms >= 1000.0f ? String (ms / 1000.0f, 2) + " s" : String (roundToInt (ms)) + " ms");
+    txt << (ms >= 1000.0f ? String (ms / 1000.0f, 3) + " s" : (ms < 100.0f ? String (ms, 1) : String (roundToInt (ms))) + " ms");
     if (ms <= 0.0f) txt = {};
     if (flash > 0.0f) flash = std::max (0.0f, flash - 0.2f);
     if (txt != shownText || std::abs (tw - shownTw) > 0.02f || flash > 0.0f)
     {
+        if (txt != shownText) { readout.setText (txt, dontSendNotification); readout.setColour (Label::textColourId, ocui::text); }
         shownText = txt; shownTw = tw;
         twistBtn.setColour (TextButton::buttonColourId, ocui::knobBody.interpolatedWith (Colour (0xffb36b1e), jlimit (0.0f, 1.0f, tw)));
         tapBtn.setColour (TextButton::buttonColourId, ocui::knobBody.interpolatedWith (Colour (0xff4f7bd1), flash));
@@ -715,12 +798,7 @@ void DelayBar::timerCallback()
     }
 }
 
-void DelayBar::paint (Graphics& g)
-{
-    g.setColour (ocui::text);
-    g.setFont (Font (12.5f, Font::bold));
-    g.drawText (shownText, getLocalBounds().withTrimmedLeft (112).reduced (2, 0), Justification::centredRight);
-}
+void DelayBar::paint (Graphics&) {}
 
 void DelayBar::resized()
 {
@@ -728,6 +806,8 @@ void DelayBar::resized()
     tapBtn.setBounds (r.removeFromLeft (48));
     r.removeFromLeft (6);
     twistBtn.setBounds (r.removeFromLeft (56));
+    r.removeFromLeft (4);
+    readout.setBounds (r);
 }
 
 // =====================================================================================
@@ -834,15 +914,16 @@ StandaloneBar::StandaloneBar (OmniChainProcessor& p) : proc (p)
     folderBtn.onClick = [] { OmniChainProcessor::getRecordingsFolder().startAsProcess(); };
 
     bpm.setSliderStyle (Slider::LinearHorizontal);
-    bpm.setTextBoxStyle (Slider::TextBoxLeft, false, 64, 22);
-    bpm.setRange (30.0, 300.0, 1.0);
+    bpm.setTextBoxStyle (Slider::TextBoxLeft, false, 84, 22);
+    bpm.setRange (30.0, 300.0, 0.01);
+    bpm.setNumDecimalPlacesToDisplay (2);
     bpm.setTextValueSuffix (" BPM");
     bpm.setValue (proc.hostlessBpm.load(), dontSendNotification);
     bpm.setDoubleClickReturnValue (true, 120.0);
     bpm.setColour (Slider::trackColourId, Colour (0xff7c9cff));
     bpm.setColour (Slider::textBoxOutlineColourId, Colours::transparentBlack);
     bpm.onValueChange = [this] { proc.hostlessBpm = (float) bpm.getValue(); };
-    bpm.setTooltip ("Song tempo for tempo-synced effects (no DAW = no tempo, so set it here)");
+    bpm.setTooltip ("Song tempo for tempo-synced effects. Click the number to type an exact tempo, e.g. 92.5");
     addAndMakeVisible (bpm);
 
     metroVol.setSliderStyle (Slider::LinearHorizontal);
@@ -1071,6 +1152,7 @@ void OmniChainPanel::showMoreMenu()
     m.addSeparator();
     m.addItem (9, "Delay & reverb trails after bypass", true, proc.getTrails());
     m.addItem (10, "NAM: run A2 captures at their Lite size (less CPU)", true, OmniChainProcessor::getNamLight());
+    m.addItem (11, "Downloads folder to watch for captures: " + OmniChainProcessor::getInboxFolder().getFileName() + "...");
     SafePointer<OmniChainPanel> safe (this);
     m.showMenuAsync (PopupMenu::Options().withTargetComponent (&loadBtn), [safe] (int r)
     {
@@ -1126,6 +1208,13 @@ void OmniChainPanel::showMoreMenu()
             case 6: OmniChainProcessor::getUserPresetFolder().startAsProcess(); break;
             case 9: pr.setTrails (! pr.getTrails()); break;
             case 10: pr.setNamLight (! OmniChainProcessor::getNamLight()); break;
+            case 11:
+                safe->chooser = std::make_unique<FileChooser> ("Folder where your browser saves downloads", OmniChainProcessor::getInboxFolder());
+                safe->chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectDirectories, [safe] (const FileChooser& fc)
+                {
+                    if (safe != nullptr && fc.getResult().isDirectory()) { OmniChainProcessor::setInboxFolder (fc.getResult()); safe->rescanDownloads(); }
+                });
+                break;
             case 8:
                 if (cur.existsAsFile()) pr.loadPresetFile (cur);
                 else for (int i = 0; i < pr.getNumPrograms(); ++i) if (pr.getProgramName (i) == pr.currentPresetName) pr.setCurrentProgram (i);
@@ -1155,6 +1244,14 @@ void OmniChainPanel::showScale (float sc)
 
 void OmniChainPanel::timerCallback()
 {
+    // every ~4 s, while a NAM or IR slot is on screen, look for new captures in the Downloads folder (local only)
+    if (++scanTicks >= 120)
+    {
+        scanTicks = 0;
+        bool fileSlot = false;
+        for (int s = 0; s < oc::kNumSlots; ++s) fileSlot |= oc::typeUsesResource (proc.getSlotType (s));
+        if (fileSlot) rescanDownloads();
+    }
     for (auto& c : cards) c->refresh();
     if (tunerOverlay.isVisible() != proc.tunerOn.load()) { tunerOverlay.setVisible (proc.tunerOn.load()); if (tunerOverlay.isVisible()) tunerOverlay.toFront (false); }
     const float decay = 0.86f;

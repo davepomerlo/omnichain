@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include <map>
 #include "PluginEditor.h"
 #include "dsp/NamEffect.h"
 
@@ -66,9 +67,17 @@ AudioProcessorValueTreeState::ParameterLayout OmniChainProcessor::createLayout()
         for (int k = 0; k < oc::kParamsPerSlot; ++k)
         {
             auto fmt = [typePtr, k] (float v, int) { return String (oc::formatParamNorm (typePtr->getIndex(), k, v)); };
+            // typing a value (in OmniChain or in the DAW) uses the loaded effect's own units: "375 ms", "1.5 s", "Tape"...
+            auto parse = [typePtr, k] (const String& t) -> float
+            {
+                const auto& pi = oc::getInfo (typePtr->getIndex()).params[k];
+                float real = 0.0f;
+                if (oc::parseParam (pi, t.toStdString(), real)) return oc::paramToNorm (pi, real);
+                return oc::paramToNorm (pi, pi.def);      // not understood: back to the default
+            };
             grp->addChild (std::make_unique<AudioParameterFloat> (ParameterID { pid (s, "p" + String (k + 1)), 1 }, n + " Knob " + String (k + 1),
                                                                   NormalisableRange<float> (0.0f, 1.0f), 0.5f,
-                                                                  AudioParameterFloatAttributes().withStringFromValueFunction (fmt)));
+                                                                  AudioParameterFloatAttributes().withStringFromValueFunction (fmt).withValueFromStringFunction (parse)));
         }
         layout.add (std::move (grp));
     }
@@ -110,6 +119,7 @@ void OmniChainProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
         }
     if (! hostTempo) ctx.bpm = jlimit (30.0, 300.0, (double) hostlessBpm.load());
     hostHasTempo.store (hostTempo, std::memory_order_relaxed);
+    currentBpm.store ((float) ctx.bpm, std::memory_order_relaxed);
 
     float* L = buffer.getWritePointer (0);
     const bool tuning = tunerOn.load (std::memory_order_relaxed);
@@ -290,6 +300,40 @@ float OmniChainProcessor::tapDelay (int slot)
         setParamValue (sync, 0.0f);
     }
     return ms;
+}
+
+// Typed into the delay read-out: "375", "375 ms", "1.25 s" set the time (free), "1/8D" picks a sync division,
+// "92.5 bpm" sets the tempo (or, when the DAW owns the tempo, the time for one beat at that tempo x the division).
+bool OmniChainProcessor::setDelayFromText (int slot, const String& text)
+{
+    if (getSlotType (slot) != oc::FxDelay) return false;
+    const auto& info = oc::getInfo (oc::FxDelay);
+    auto* sync = param (slot, "p2");
+    auto* time = param (slot, "p1");
+    const auto t = text.trim().toLowerCase().removeCharacters (" ");
+    if (t.isEmpty()) return false;
+    if (t == "off" || t == "free") { setParamValue (sync, 0.0f); return true; }
+    for (int i = 0; i < oc::kNumSync; ++i)
+        if (t == String (oc::kSyncNames[i]).toLowerCase()) { setParamValue (sync, oc::paramToNorm (info.params[1], (float) (i + 1))); return true; }
+    if (t.endsWith ("bpm"))
+    {
+        const float bpm = t.dropLastCharacters (3).getFloatValue();
+        if (bpm < 30.0f || bpm > 300.0f) return false;
+        const int si = roundToInt (oc::paramToReal (info.params[1], sync->getValue()));
+        if (! hostHasTempo.load()) { hostlessBpm = bpm; if (si <= 0) setParamValue (sync, oc::paramToNorm (info.params[1], 4.0f)); }   // 4 = 1/4
+        else
+        {
+            const float beats = si > 0 ? oc::kSyncBeats[si - 1] : 1.0f;
+            setParamValue (time, oc::paramToNorm (info.params[0], jlimit (1.0f, 10000.0f, 60000.0f / bpm * beats)));
+            setParamValue (sync, 0.0f);
+        }
+        return true;
+    }
+    float ms = 0.0f;
+    if (! oc::parseParam (info.params[0], t.toStdString(), ms)) return false;
+    setParamValue (time, oc::paramToNorm (info.params[0], ms));
+    setParamValue (sync, 0.0f);
+    return true;
 }
 
 void OmniChainProcessor::setTrails (bool on)
@@ -772,6 +816,83 @@ Array<File> OmniChainProcessor::importToneFiles (const Array<File>& files, bool 
             if (f.copyFileTo (out)) added.add (out);
         }
     }
+    return added;
+}
+
+// ------------------------------------------------------------------ downloads inbox (offline-first TONE3000 workflow)
+// You download tones by hand in your browser; OmniChain notices new captures / IRs in your Downloads folder and
+// offers to copy them into your own folders. After that everything works offline. Nothing is ever fetched.
+File OmniChainProcessor::getInboxFolder()
+{
+    const File custom (globalSettings().getValue ("inboxFolder"));
+    if (custom.isDirectory()) return custom;
+    return File::getSpecialLocation (File::userHomeDirectory).getChildFile ("Downloads");
+}
+
+void OmniChainProcessor::setInboxFolder (const File& dir) { globalSettings().setValue ("inboxFolder", dir.getFullPathName()); }
+
+static String inboxKey (const File& f) { return f.getFileName() + "|" + String (f.getSize()) + "|" + String (f.getLastModificationTime().toMilliseconds()); }
+
+static bool isToneDownloadUncached (const File& f);
+static bool isToneDownload (const File& f)
+{
+    static std::map<String, bool> cache;           // zips are only opened once (message thread)
+    const auto key = inboxKey (f);
+    auto it = cache.find (key);
+    if (it != cache.end()) return it->second;
+    const bool r = isToneDownloadUncached (f);
+    if (cache.size() > 2000) cache.clear();
+    cache[key] = r;
+    return r;
+}
+
+static bool isToneDownloadUncached (const File& f)
+{
+    if (OmniChainProcessor::isNamFile (f)) return true;
+    if (OmniChainProcessor::isIrFile (f)) return f.getSize() < 2 * 1024 * 1024;          // a short IR, not a song or a sample pack
+    if (! f.hasFileExtension ("zip") || f.getSize() > 200 * 1024 * 1024) return false;
+    ZipFile zip (f);
+    for (int i = 0; i < zip.getNumEntries(); ++i)
+        if (auto* e = zip.getEntry (i))
+        {
+            const auto n = e->filename.toLowerCase();
+            if (n.contains ("__macosx")) continue;
+            if (n.endsWith (".nam") || ((n.endsWith (".wav") || n.endsWith (".aif") || n.endsWith (".aiff") || n.endsWith (".flac")) && e->uncompressedSize < 2 * 1024 * 1024))
+                return true;
+        }
+    return false;
+}
+
+Array<File> OmniChainProcessor::findNewDownloads()
+{
+    Array<File> found;
+    const auto dir = getInboxFolder();
+    if (! dir.isDirectory()) return found;
+    auto& gs = globalSettings();
+    // the first time, only look at the last two weeks of downloads
+    if (! gs.containsKey ("inboxSince")) gs.setValue ("inboxSince", (Time::getCurrentTime() - RelativeTime::days (14)).toMilliseconds());
+    const Time since (gs.getValue ("inboxSince").getLargeIntValue());
+    StringArray seen; seen.addLines (gs.getValue ("inboxSeen"));
+    for (auto& f : dir.findChildFiles (File::findFiles, false, "*.nam;*.zip;*.wav;*.aif;*.aiff;*.flac"))
+        if (f.getLastModificationTime() > since && ! seen.contains (inboxKey (f)) && isToneDownload (f)) found.add (f);
+    return found;
+}
+
+void OmniChainProcessor::markDownloadsSeen (const Array<File>& files)
+{
+    auto& gs = globalSettings();
+    StringArray seen; seen.addLines (gs.getValue ("inboxSeen"));
+    for (auto& f : files) seen.addIfNotAlreadyThere (inboxKey (f));
+    while (seen.size() > 800) seen.remove (0);
+    gs.setValue ("inboxSeen", seen.joinIntoString ("\n"));
+}
+
+// copy every capture and IR in these downloads into your folders (both kinds, so a mixed zip works)
+Array<File> OmniChainProcessor::importDownloads (const Array<File>& files)
+{
+    auto added = importToneFiles (files, true);
+    added.addArray (importToneFiles (files, false));
+    markDownloadsSeen (files);
     return added;
 }
 

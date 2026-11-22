@@ -1,6 +1,9 @@
 // OmniChain - effect catalogue table and parameter value mapping
 #include "Effects.h"
 #include <cstdio>
+#include <cstdlib>
+#include <cctype>
+#include <cmath>
 
 namespace oc
 {
@@ -342,6 +345,49 @@ float paramToNorm (const ParamInfo& p, float r)
         case Curve::Sq:     return std::sqrt ((r - p.min) / (p.max - p.min));
     }
     return 0.0f;
+}
+
+static std::string lowerTrim (const std::string& t)
+{
+    std::string s;
+    for (char c : t) if (! std::isspace ((unsigned char) c)) s += (char) std::tolower ((unsigned char) c);
+    return s;
+}
+
+bool parseParam (const ParamInfo& p, const std::string& text, float& real)
+{
+    const std::string s = lowerTrim (text);
+    if (s.empty() || p.name == nullptr) return false;
+    if (p.curve == Curve::Choice)
+    {
+        // exact name, then a name that starts with what was typed, then the position in the list (1 = first)
+        for (int pass = 0; pass < 2; ++pass)
+            for (int i = 0; i < p.numChoices; ++i)
+            {
+                const std::string c = lowerTrim (p.choices[i]);
+                if (pass == 0 ? c == s : c.rfind (s, 0) == 0) { real = (float) i; return true; }
+            }
+        char* end = nullptr;
+        const long n = std::strtol (s.c_str(), &end, 10);
+        if (end != s.c_str() && *end == 0 && n >= 1 && n <= p.numChoices) { real = float (n - 1); return true; }
+        return false;
+    }
+    const std::string u = p.unit ? p.unit : "";
+    if ((u == "Hz<" || u == "Hz>") && s == "off") { real = u == "Hz<" ? p.min : p.max; return true; }
+    char* end = nullptr;
+    double v = std::strtod (s.c_str(), &end);
+    if (end == s.c_str() || ! std::isfinite (v)) return false;
+    const std::string suf (end);
+    const bool isMs = u == "ms", isS = u == "s", isHz = u.rfind ("Hz", 0) == 0;
+    if (suf.empty() || suf == "%" || suf == "db" || suf == "st" || suf == "ct" || suf == "x" || suf == "bit" || suf == lowerTrim (u)) {}
+    else if (isMs && (suf == "s" || suf == "sec")) v *= 1000.0;
+    else if (isS && suf == "ms") v /= 1000.0;
+    else if (isHz && (suf == "k" || suf == "khz")) v *= 1000.0;
+    else if (isHz && suf == "hz") {}
+    else return false;
+    real = clampf ((float) v, std::min (p.min, p.max), std::max (p.min, p.max));
+    if (p.curve == Curve::Int) real = std::round (real);
+    return true;
 }
 
 std::string formatParam (const ParamInfo& p, float v)

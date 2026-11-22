@@ -29,6 +29,8 @@ public:
     juce::Slider slider;
     juce::Label name, value;
     void setAccent (juce::Colour c);
+    // click the value to type one; parser turns text into the slider's value (false = not understood)
+    std::function<bool (const juce::String&, double&)> parser;
 };
 } // namespace ocui
 
@@ -75,6 +77,7 @@ private:
     const int slot;
     juce::TextButton tapBtn { "Tap" };
     HoldButton twistBtn { "Twist" };
+    juce::Label readout;                 // click to type a time, a division or a tempo
     juce::String shownText;
     float shownTw = -1.0f, flash = 0.0f;
 };
@@ -102,6 +105,7 @@ public:
     void openFileChooser();
     void openImportChooser();
     void importFiles (const juce::Array<juce::File>& files);
+    void importInbox();
     void showLoadMenu();
     void addLibraryFolder (juce::PopupMenu&, const juce::File& dir, bool nam, const juce::File& current);
     juce::Array<juce::File> libraryFiles, slotPatchFiles;
@@ -130,6 +134,7 @@ private:
     juce::TextButton loadBtn { "Load" }, filePrev { "<" }, fileNext { ">" };
     std::unique_ptr<juce::FileChooser> chooser;
     juce::String shownFileText;
+    int shownInbox = -1;
 
     using SA = juce::AudioProcessorValueTreeState::SliderAttachment;
     using BA = juce::AudioProcessorValueTreeState::ButtonAttachment;
@@ -191,6 +196,9 @@ private:
     bool isUserPreset() const { return proc.userPresetFile (proc.currentPresetName).existsAsFile(); }
 public:
     std::function<void (float)> onScaleChosen;
+    int getNewDownloadCount() const { return newDownloads.size(); }
+    const juce::Array<juce::File>& getNewDownloads() const { return newDownloads; }
+    void rescanDownloads() { newDownloads = OmniChainProcessor::findNewDownloads(); }
     void showScale (float s);
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int, int) override;
@@ -208,6 +216,8 @@ private:
     juce::Array<juce::File> userPresets;
     float inLvl = 0, outLvl = 0;
     juce::String shownPreset;
+    juce::Array<juce::File> newDownloads;  // captures / IRs waiting in the Downloads folder
+    int scanTicks = 0;
     juce::TooltipWindow tooltips { this, 700 };
     std::unique_ptr<StandaloneBar> standaloneBar;
     TunerOverlay tunerOverlay { proc };

@@ -74,15 +74,23 @@ public:
     static bool getNamLight();                                  // run NAM A2 captures at their Lite size (less CPU)
     void setNamLight (bool on);
     static juce::Array<juce::File> importToneFiles (const juce::Array<juce::File>& files, bool nam);   // .nam / .wav / .zip
+    // offline-first downloads inbox: new captures / IRs you downloaded by hand (Downloads folder by default)
+    static juce::File getInboxFolder();
+    static void setInboxFolder (const juce::File& dir);
+    static juce::Array<juce::File> findNewDownloads();
+    static void markDownloadsSeen (const juce::Array<juce::File>& files);
+    static juce::Array<juce::File> importDownloads (const juce::Array<juce::File>& files);
     juce::File lastFileFolder;
 
     // ---- standalone-app helpers (also harmless inside a DAW) ----
     bool isStandalone() const { return wrapperType == wrapperType_Standalone; }
     std::atomic<float> hostlessBpm { 120.0f };   // tempo used when the host gives none (standalone app)
     std::atomic<bool> hostHasTempo { false };
+    std::atomic<float> currentBpm { 120.0f };     // tempo of the last audio block (DAW or app)
 
     // ---- delay helpers ----
     float tapDelay (int slot);                   // returns the tapped interval in ms (0 until two taps)
+    bool setDelayFromText (int slot, const juce::String& text);   // "375 ms", "1.2 s", "1/8D", "92.5 bpm"
     void setTwist (int slot, bool on) { engine.sendCommand (slot, on ? 1 : 2); }
     bool getTrails() const { return engine.trails.load(); }
     void setTrails (bool on);                    // delays / reverbs keep ringing after bypass

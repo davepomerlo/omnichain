@@ -393,6 +393,59 @@ int main (int argc, char** argv)
         }
     }
 
+    // 13. v2.3: typed values, precise tempo, downloads inbox
+    {
+        const auto& di = oc::getInfo (oc::FxDelay);
+        float v = 0;
+        CHECK (oc::parseParam (di.params[0], "1.5 s", v) && std::abs (v - 1500.0f) < 0.01f, "parse 1.5 s");
+        CHECK (oc::parseParam (di.params[0], "375", v) && std::abs (v - 375.0f) < 0.01f, "parse 375");
+        CHECK (oc::parseParam (di.params[0], "437.5ms", v) && std::abs (v - 437.5f) < 0.01f, "parse 437.5ms");
+        CHECK (oc::parseParam (di.params[3], "6k", v) && std::abs (v - 6000.0f) < 0.5f, "parse 6k");
+        CHECK (oc::parseParam (di.params[4], "tape", v) && v == 2.0f && oc::parseParam (di.params[4], "Crys", v) && v == 7.0f, "parse type names");
+        CHECK (! oc::parseParam (di.params[0], "abc", v) && ! oc::parseParam (di.params[0], "5 kg", v), "reject nonsense");
+
+        OmniChainProcessor d; d.setPlayConfigDetails (2, 2, sr, bs); d.prepareToPlay (sr, bs);
+        d.setSlotType (0, oc::FxDelay, true);
+        auto* p1 = d.param (0, "p1");
+        CHECK (std::abs (oc::paramToReal (di.params[0], p1->getValueForText ("750 ms")) - 750.0f) < 0.1f, "DAW typed value uses effect units");
+        CHECK (p1->getText (p1->getValue(), 32).isNotEmpty(), "value text");
+        auto realOf = [&] (int k) { return oc::paramToReal (di.params[k], d.param (0, "p" + String (k + 1))->getValue()); };
+        CHECK (d.setDelayFromText (0, "250 ms") && std::abs (realOf (0) - 250.0f) < 0.1f && realOf (1) == 0.0f, "type a delay time");
+        CHECK (d.setDelayFromText (0, "1/8D") && realOf (1) == 8.0f, "type a division");
+        bool fin = true; runAudio (d, 2, bs, 2, sr, fin);       // no host tempo here, so "bpm" sets OmniChain's own tempo
+        CHECK (d.setDelayFromText (0, "92.5 bpm") && std::abs (d.hostlessBpm.load() - 92.5f) < 0.001f, "type a tempo");
+        runAudio (d, 20, bs, 2, sr, fin);
+        const float want = 0.75f * 60000.0f / 92.5f;
+        std::printf ("1/8D at 92.5 BPM -> %.2f ms (want %.2f)\n", d.engine.getSlotStatus (0, 0), want);
+        CHECK (std::abs (d.engine.getSlotStatus (0, 0) - want) < 0.5f, "synced time follows typed tempo");
+        CHECK (! d.setDelayFromText (0, "hello"), "nonsense ignored");
+
+        // downloads inbox: a TONE3000-style zip appears in the watched folder, gets imported once, then is not offered again
+        const auto inbox = File::getSpecialLocation (File::tempDirectory).getChildFile ("zz omnichain inbox");
+        inbox.deleteRecursively(); inbox.createDirectory();
+        const auto oldInbox = OmniChainProcessor::getInboxFolder();
+        OmniChainProcessor::setInboxFolder (inbox);
+        if (namPath.isNotEmpty())
+        {
+            const auto ir = OmniChainProcessor::getLibraryFolder().getChildFile ("IR").findChildFiles (File::findFiles, true, "*.wav");
+            { ZipFile::Builder zb; zb.addFile (File (namPath), 9, "zz Inbox Amp/zz inbox amp.nam"); if (! ir.isEmpty()) zb.addFile (ir[0], 9, "zz Inbox Amp/zz inbox cab.wav");
+              FileOutputStream os (inbox.getChildFile ("zz Inbox Amp.zip")); zb.writeToStream (os, nullptr); }
+            inbox.getChildFile ("holiday photo.zip").replaceWithText ("not a zip");
+            inbox.getChildFile ("song.mp3").replaceWithText ("x");
+            const auto found = OmniChainProcessor::findNewDownloads();
+            std::printf ("inbox found %d new download(s)\n", found.size());
+            CHECK (found.size() == 1 && found[0].getFileName() == "zz Inbox Amp.zip", "inbox spots the tone download only");
+            const auto added = OmniChainProcessor::importDownloads (found);
+            int nNam = 0, nIr = 0; for (auto& f : added) { if (OmniChainProcessor::isNamFile (f)) ++nNam; else ++nIr; }
+            CHECK (nNam == 1 && nIr == (ir.isEmpty() ? 0 : 1), "inbox imports capture and IR to their folders");
+            CHECK (OmniChainProcessor::findNewDownloads().isEmpty(), "imported downloads are not offered again");
+            CHECK (inbox.getChildFile ("zz Inbox Amp.zip").existsAsFile(), "original download left in place");
+            for (auto& f : added) f.getParentDirectory().deleteRecursively();
+        }
+        OmniChainProcessor::setInboxFolder (oldInbox);
+        inbox.deleteRecursively();
+    }
+
     std::printf ("\n%s (%d failures)\n", failures ? "FAILED" : "ALL HOST TESTS OK", failures);
     return failures ? 1 : 0;
 }

@@ -74,6 +74,22 @@ cp -r OmniChain.vst3 ~/.vst3/ && cp -r OmniChain.lv2 ~/.lv2/ && cp OmniChain.cla
 The standalone app (`OmniChain.exe` / `OmniChain.app` / `OmniChain`) lets you plug your guitar interface in and play with no DAW needed.
 Set the audio device under *Options → Audio/MIDI settings*.
 
+## New in 2.3
+
+* **Type exact values.** Click the value under any knob and type it: `375`, `437.5 ms`, `1.5 s`, `6k`, `-3 dB`, `40%`,
+  or a name like `Tape` or `1/8D`. The units follow the knob, and typing works in your DAW's own parameter boxes too.
+  Hold **Shift** while dragging a knob for fine moves.
+* **Delay read-out you can type into.** Click the time next to Tap / Twist and type a time (`375 ms`, `1.25 s`),
+  a division (`1/8D`) or a tempo (`92.5 bpm`). When synced, it shows the whole sum, for example *1/4D @ 120 BPM = 750 ms*.
+* **Precise tempo in the app:** the tempo box takes two decimals (for example `92.50 BPM`). Click it to type.
+* **TONE3000, offline-first.** You download tones by hand on tone3000.com. OmniChain picks them up and never needs the internet to play:
+  1. In a NAM or IR slot, choose **Load → Browse TONE3000** and download what you like (the zip is fine).
+  2. Come back to OmniChain. The **Load** button turns blue when new captures or IRs are waiting in your Downloads folder.
+  3. Choose **Load → Import new downloads**. They're copied into `Documents\OmniChain NAM Models` / `OmniChain IRs`
+     and appear under **Load → Your captures / Your IRs**. Your downloads stay where they were.
+  * If your browser saves somewhere else, pick that folder under **More → Downloads folder to watch**.
+  * OmniChain only looks at files on your computer. It never connects to TONE3000 or anything else.
+
 ## New in 2.2
 
 * **Delay, rebuilt after the TC Flashback 2 X4 and the BOSS DD-8.** 15 echo types (original voicings inspired by those
@@ -247,6 +263,7 @@ expression pedal. Any other knob can be linked the same way, for example Freeze 
 | New in 2.0: effects | **Looper** (45 s, overdub, half/double speed, reverse, bar-synced), **Frequency Shifter**, **Wavefolder**, **Hyper Unison**, **Glass Bells**, **Vinyl**, **Underwater**, **Exciter**, **Doubler**, **Acoustic Simulator** |
 | New in 2.1 | **Prism Shifter**, **Dream Loop**, **Microverse**, plus the redesigned **Looper** |
 | New in 2.2 | **Delay** rebuilt with 15 types (Flashback 2 X4 / DD-8 inspired), Tap, Twist and trails |
+| New in 2.3 | Typed knob values, typed delay time / tempo, offline-first TONE3000 downloads inbox |
 | Loaders | **NAM Capture** (Neural Amp Modeler `.nam`), **Cab IR Loader** (`.wav/.aif/.flac`, zero-latency partitioned convolution) |
 
 ### About "zero latency"
