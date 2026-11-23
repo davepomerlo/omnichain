@@ -28,6 +28,17 @@ OmniChainProcessor::OmniChainProcessor()
     }
     engine.setGlobalParams (apvts.getRawParameterValue ("in"), apvts.getRawParameterValue ("out"), apvts.getRawParameterValue ("mix"));
     formats.registerBasicFormats();
+    for (int i = 0; i < 128; ++i) { ccTarget[(size_t) i].store (-1); ccFollow[(size_t) i].store (false); }
+    for (auto* p : getParameters())
+    {
+        auto* rp = dynamic_cast<RangedAudioParameter*> (p);
+        paramIsBypass.push_back (rp != nullptr && rp->getParameterID().endsWith ("_byp") ? 1 : 0);
+    }
+    if (kMidiControl)
+    {
+        loadMidiLinks();
+        addListener (&gestureWatcher);
+    }
     markClean();
     startTimerHz (40);
 }
@@ -35,6 +46,7 @@ OmniChainProcessor::OmniChainProcessor()
 OmniChainProcessor::~OmniChainProcessor()
 {
     stopTimer();
+    if (kMidiControl) removeListener (&gestureWatcher);
     stopRecording();
 }
 
@@ -101,9 +113,14 @@ bool OmniChainProcessor::isBusesLayoutSupported (const BusesLayout& layouts) con
     return in.size() <= out.size();
 }
 
-void OmniChainProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
+void OmniChainProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& midi)
 {
     ScopedNoDenormals noDenormals;
+    if (! midi.isEmpty())
+    {
+        handleMidi (midi);
+        midi.clear();       // an effect: nothing goes out
+    }
     const int n = buffer.getNumSamples();
     const int numIn = getTotalNumInputChannels(), numOut = getTotalNumOutputChannels();
     for (int c = numIn; c < numOut; ++c) buffer.clear (c, 0, n);
@@ -1021,6 +1038,202 @@ Array<File> OmniChainProcessor::importDownloads (const Array<File>& files)
     added.addArray (importToneFiles (files, false));
     markDownloadsSeen (files);
     return added;
+}
+
+// ------------------------------------------------------------------ MIDI learn (OmniChain MIDI build)
+// A footswitch or expression pedal sends MIDI CCs. Learn links one CC to one control; the links are kept in the
+// shared settings file, so they work in every project and preset on this computer. Program Change picks presets.
+bool OmniChainProcessor::isMidiLinkable (int index) const
+{
+    const auto& params = getParameters();
+    if (! isPositiveAndBelow (index, params.size())) return false;
+    return dynamic_cast<AudioParameterChoice*> (params[index]) == nullptr;   // not the effect-type pickers
+}
+
+String OmniChainProcessor::describeParam (int index) const
+{
+    const auto& params = getParameters();
+    auto* rp = isPositiveAndBelow (index, params.size()) ? dynamic_cast<RangedAudioParameter*> (params[index]) : nullptr;
+    if (rp == nullptr) return {};
+    const auto id = rp->getParameterID();            // "s2_p3", "s2_byp", "in", ...
+    if (id.startsWithChar ('s') && id.containsChar ('_'))
+    {
+        const int slot = id.substring (1).getIntValue() - 1;
+        const auto what = id.fromFirstOccurrenceOf ("_", false, false);
+        if (isPositiveAndBelow (slot, oc::kNumSlots))
+        {
+            const int type = getSlotType (slot);
+            const auto& info = oc::getInfo (type);
+            String name = "Slot " + String (slot + 1);
+            if (type != oc::FxNone) name << " " << info.name;
+            if (what == "byp") return name + " on/off";
+            if (what == "mix") return name + " Mix";
+            if (what == "lvl") return name + " Level";
+            if (what.startsWithChar ('p'))
+            {
+                const int k = what.substring (1).getIntValue() - 1;
+                if (isPositiveAndBelow (k, oc::kParamsPerSlot) && info.params[k].name != nullptr) return name + " " + info.params[k].name;
+            }
+        }
+    }
+    return rp->getName (64);
+}
+
+void OmniChainProcessor::GestureWatcher::audioProcessorParameterChangeGestureBegin (AudioProcessor*, int index)
+{
+    // while learning, the control you touch last is the one that gets linked
+    int t = owner.midiLearn.load();
+    if ((t == kLearnWaitControl || t >= 0) && owner.isMidiLinkable (index))
+        owner.midiLearn.compare_exchange_strong (t, index);
+}
+
+void OmniChainProcessor::handleMidi (const MidiBuffer& midi)    // audio thread: no locks, no allocation
+{
+    if (! kMidiControl) return;
+    const auto& params = getParameters();
+    for (const auto meta : midi)
+    {
+        const auto m = meta.getMessage();
+        if (m.isProgramChange()) { pendingProgram.store (m.getProgramChangeNumber()); continue; }
+        if (! m.isController()) continue;
+        const int cc = m.getControllerNumber(), v = m.getControllerValue();
+        if (! isPositiveAndBelow (cc, 120)) continue;            // 120-127 are channel-mode messages (all notes off, ...)
+
+        int learn = midiLearn.load();
+        if (learn >= 0)
+        {
+            if (! midiLearn.compare_exchange_strong (learn, kLearnOff)) continue;
+            for (auto& t : ccTarget) if (t.load() == learn) t.store (-1);   // one CC per control
+            ccTarget[(size_t) cc].store (learn);
+            ccFollow[(size_t) cc].store (false);
+            lastLearnedCc.store (cc);
+            midiLinksDirty.store (true);
+            continue;                                             // the learning press itself changes nothing
+        }
+
+        const int idx = ccTarget[(size_t) cc].load();
+        if (! isPositiveAndBelow (idx, params.size())) continue;
+        auto* p = params.getUnchecked (idx);
+        if (p->isBoolean())
+        {
+            const bool isBypass = isPositiveAndBelow (idx, (int) paramIsBypass.size()) && paramIsBypass[(size_t) idx];
+            if (ccFollow[(size_t) cc].load())
+            {
+                const bool down = v >= 64;
+                const float nv = (down != isBypass) ? 1.0f : 0.0f;   // switch down = effect on
+                if (p->getValue() != nv) p->setValueNotifyingHost (nv);
+            }
+            else if (v >= 64)                                     // each press toggles; the release (0) is ignored
+                p->setValueNotifyingHost (p->getValue() >= 0.5f ? 0.0f : 1.0f);
+        }
+        else p->setValueNotifyingHost ((float) v / 127.0f);
+    }
+}
+
+void OmniChainProcessor::serviceMidi()
+{
+    if (! kMidiControl) return;
+    const int pc = pendingProgram.exchange (-1);
+    if (pc >= 0)
+    {
+        const int numFactory = getNumPrograms();
+        if (pc < numFactory) { setCurrentProgram (pc); updateHostDisplay(); }
+        else
+        {
+            auto user = getUserPresetFolder().findChildFiles (File::findFiles, false, "*.ocpreset");
+            user.sort();                                          // same order as the preset list
+            if (isPositiveAndBelow (pc - numFactory, user.size())) loadPresetFile (user[pc - numFactory]);
+        }
+    }
+    if (midiLinksDirty.exchange (false))
+    {
+        saveMidiLinks();
+        learnedShownUntil = Time::getMillisecondCounter() + 4000;
+    }
+}
+
+String OmniChainProcessor::getMidiStatus()
+{
+    switch (getMidiLearnStage())
+    {
+        case 1: return "MIDI learn: touch the knob or switch you want to control (More menu to cancel)";
+        case 2: return "MIDI learn: now press a footswitch or move a pedal for " + getMidiLearnTargetName();
+        default: break;
+    }
+    if (Time::getMillisecondCounter() < learnedShownUntil)
+    {
+        const int cc = lastLearnedCc.load();
+        if (isPositiveAndBelow (cc, 128))
+        {
+            const int t = ccTarget[(size_t) cc].load();
+            if (t >= 0) return "MIDI: CC " + String (cc) + " now controls " + describeParam (t);
+        }
+    }
+    return {};
+}
+
+Array<OmniChainProcessor::MidiLinkInfo> OmniChainProcessor::getMidiLinks() const
+{
+    Array<MidiLinkInfo> out;
+    const auto& params = getParameters();
+    for (int cc = 0; cc < 128; ++cc)
+    {
+        const int t = ccTarget[(size_t) cc].load();
+        if (isPositiveAndBelow (t, params.size()))
+            out.add ({ cc, describeParam (t), params[t]->isBoolean(), ccFollow[(size_t) cc].load() });
+    }
+    return out;
+}
+
+void OmniChainProcessor::forgetMidiLink (int cc)
+{
+    if (! isPositiveAndBelow (cc, 128)) return;
+    ccTarget[(size_t) cc].store (-1);
+    saveMidiLinks();
+}
+
+void OmniChainProcessor::forgetAllMidiLinks()
+{
+    for (auto& t : ccTarget) t.store (-1);
+    saveMidiLinks();
+}
+
+void OmniChainProcessor::setMidiLinkFollow (int cc, bool follow)
+{
+    if (! isPositiveAndBelow (cc, 128)) return;
+    ccFollow[(size_t) cc].store (follow);
+    saveMidiLinks();
+}
+
+void OmniChainProcessor::saveMidiLinks()
+{
+    XmlElement x ("MIDI");
+    const auto& params = getParameters();
+    for (int cc = 0; cc < 128; ++cc)
+    {
+        const int t = ccTarget[(size_t) cc].load();
+        if (auto* rp = isPositiveAndBelow (t, params.size()) ? dynamic_cast<RangedAudioParameter*> (params[t]) : nullptr)
+        {
+            auto* l = x.createNewChildElement ("Link");
+            l->setAttribute ("cc", cc);
+            l->setAttribute ("param", rp->getParameterID());
+            l->setAttribute ("follow", (bool) ccFollow[(size_t) cc].load());
+        }
+    }
+    globalSettings().setValue ("midiLinks", &x);
+}
+
+void OmniChainProcessor::loadMidiLinks()
+{
+    if (auto x = globalSettings().getXmlValue ("midiLinks"))
+        for (auto* l : x->getChildWithTagNameIterator ("Link"))
+        {
+            const int cc = l->getIntAttribute ("cc", -1);
+            auto* p = apvts.getParameter (l->getStringAttribute ("param"));
+            if (! isPositiveAndBelow (cc, 120) || p == nullptr || ! isMidiLinkable (p->getParameterIndex())) continue;
+            ccTarget[(size_t) cc].store (p->getParameterIndex());
+            ccFollow[(size_t) cc].store (l->getBoolAttribute ("follow"));
+        }
 }
 
 AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new OmniChainProcessor(); }

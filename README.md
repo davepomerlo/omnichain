@@ -32,7 +32,7 @@ Get the latest version from the **Releases** page (right-hand side of the repo p
 | **OmniChain-Windows-Setup.exe** | Installer: app + optional VST3/CLAP | Easiest way on Windows |
 | **OmniChain-macOS-App.dmg** | The standalone Mac app | Play without a DAW on a Mac |
 | **OmniChain-Windows.zip** | `OmniChain.vst3`, `OmniChain.clap`, `OmniChain.exe` | FL Studio, Ableton Live, Cubase, Reaper, Studio One, Bitwig, Cakewalk, Reason, … |
-| **OmniChain-macOS.zip** (Apple Silicon + Intel, macOS 11+) | `OmniChain.component` (AU), `OmniChain.vst3`, `OmniChain.clap`, `OmniChain.app` | Logic Pro, GarageBand, MainStage (AU); Ableton, Cubase, Reaper, Studio One, Bitwig, FL Studio Mac (VST3) |
+| **OmniChain-macOS.zip** (Apple Silicon + Intel, macOS 11+) | `OmniChain.component` (AU), `OmniChain MIDI.component` (AU for footswitches), `OmniChain.vst3`, `OmniChain.clap`, `OmniChain.app` | Logic Pro, GarageBand, MainStage (AU); Ableton, Cubase, Reaper, Studio One, Bitwig, FL Studio Mac (VST3) |
 | **OmniChain-Linux.tar.gz** (x86-64) | `OmniChain.vst3`, `OmniChain.lv2`, `OmniChain.clap`, standalone `OmniChain` | Reaper, Bitwig, Ardour, Carla, Qtractor, … |
 
 **Which format?** **VST3** works almost everywhere. **AU** is for Logic and GarageBand. **CLAP** is a newer open format
@@ -58,12 +58,13 @@ v2.3.2 on clear that up by themselves. With an older installer, close your DAW, 
 1. Double-click the zip to extract it.
 2. Copy the files to these folders (in Finder use **Go → Go to Folder…**):
    * `OmniChain.component` → `~/Library/Audio/Plug-Ins/Components/`
+   * `OmniChain MIDI.component` → `~/Library/Audio/Plug-Ins/Components/` (optional: footswitch / expression pedal control in Logic and MainStage, see below)
    * `OmniChain.vst3` → `~/Library/Audio/Plug-Ins/VST3/`
    * `OmniChain.clap` → `~/Library/Audio/Plug-Ins/CLAP/`
 3. The plugin isn't notarised by Apple (that needs a paid developer account), so macOS will quarantine it.
    Open **Terminal** and run this once:
    ```
-   xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/OmniChain.component ~/Library/Audio/Plug-Ins/VST3/OmniChain.vst3 ~/Library/Audio/Plug-Ins/CLAP/OmniChain.clap
+   xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/OmniChain*.component ~/Library/Audio/Plug-Ins/VST3/OmniChain.vst3 ~/Library/Audio/Plug-Ins/CLAP/OmniChain.clap
    ```
    For the app: right-click `OmniChain.app` → **Open** → **Open**.
 4. Logic Pro: **Logic Pro → Settings → Plug-in Manager → Reset & Rescan Selection** if it doesn't appear.
@@ -243,6 +244,24 @@ voiced after classic cabinet styles, but they are not recordings of real cabinet
   survives), into a cranked amp on the 4x10 cab with a low-mid push. *OM Dub Bass:* warm, compressed bass with tape echo and spring.
   On bass, adjust the Input knob so your bass hits the chain about as hard as a guitar would.
 
+### Footswitches and expression pedals in Logic Pro and MainStage (OmniChain MIDI)
+Logic only sends MIDI to plugins that are registered as *MIDI-controlled effects*, so the Mac download has a second
+Audio Unit, **OmniChain MIDI**. It is the same OmniChain (same sound, same presets) plus MIDI control. The regular
+OmniChain stays as it is, so your existing projects are unaffected.
+
+1. Make a **Software Instrument** track. In its instrument slot choose **AU MIDI-controlled Effects → OmniChain → OmniChain MIDI**.
+2. In the plugin window's header, set **Side Chain** to your guitar input (e.g. *Input 1*). Turn on monitoring for the track.
+3. Link a control: **More → MIDI footswitch & expression pedal → Learn**, touch the knob or on/off switch you want,
+   then press the footswitch or move the pedal. The header confirms the link (e.g. *CC 64 now controls Slot 2 Overdrive on/off*).
+   Repeat for other controls. Touching a different control before pressing the switch picks that one instead.
+4. Footswitch types: by default **each press toggles** (momentary switches, and switches that only send 127). For a
+   latching switch pick **Follows the switch** in the same menu (switch down = effect on).
+5. **Program Change** messages pick presets: 1 = first factory preset, then on through the factory list and your own
+   presets in name order. (Some controllers count from 0; the menu shows the exact range.)
+
+Links are saved on this computer and work in every project and preset. Forget them from the same menu.
+GarageBand doesn't host MIDI-controlled effects; use the regular OmniChain there.
+
 ### Using an expression pedal with the Wah in FL Studio
 Wiggle the Wah's **Pedal** knob, then choose **Tools → Last tweaked → Link to controller…** in FL Studio and move your MIDI
 expression pedal. Any other knob can be linked the same way, for example Freeze Pad's *Mode* on a footswitch.
@@ -298,13 +317,13 @@ git clone --depth 1 --branch 3.4.1 https://gitlab.com/libeigen/eigen.git ThirdPa
 git clone --recursive https://github.com/free-audio/clap-juce-extensions.git ThirdParty/clap-juce-extensions   # optional: CLAP
 cmake -S . -B build -A x64
 cmake --build build --config Release --target OmniChain_VST3 OmniChain_CLAP OmniChain_Standalone
-# macOS adds OmniChain_AU, Linux adds OmniChain_LV2
+# macOS adds OmniChain_AU and OmniChainMIDI_AU (the MIDI-controlled effect), Linux adds OmniChain_LV2
 ```
 
 ### Automatic builds (GitHub Actions)
 
 Every push to `main` runs the DSP stress test, then builds Windows (Visual Studio), macOS (universal, ad-hoc signed,
-checked with Apple's `auval`) and Linux (checked with Steinberg's VST3 validator) in parallel, and attaches the three packages to the run.
+both Audio Units checked with Apple's `auval`) and Linux (checked with Steinberg's VST3 validator) in parallel, and attaches the three packages to the run.
 Download it from the **Actions** tab → latest run → *Artifacts* (you need to be signed in).
 
 To publish a version anyone can download: **Actions** tab → *Build OmniChain* → **Run workflow**, type a version such as `v1.1`, and press Run.

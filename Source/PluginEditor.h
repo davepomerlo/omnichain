@@ -218,7 +218,7 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
     juce::Array<juce::File> userPresets;
     float inLvl = 0, outLvl = 0;
-    juce::String shownPreset;
+    juce::String shownPreset, shownMidiStatus;
     juce::Array<juce::File> newDownloads;  // captures / IRs waiting in the Downloads folder
     int scanTicks = 0;
     juce::TooltipWindow tooltips { this, 700 };

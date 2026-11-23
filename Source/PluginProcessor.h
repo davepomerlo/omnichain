@@ -2,6 +2,15 @@
 #include <JuceHeader.h>
 #include "dsp/Engine.h"
 #include "Presets.h"
+#include <array>
+
+// MIDI control (footswitch / expression pedal) is built into "OmniChain MIDI", the macOS Audio Unit that Logic Pro and
+// MainStage list as a MIDI-controlled effect. The regular OmniChain builds take no MIDI, so they are unchanged.
+#if defined (JucePlugin_WantsMidiInput) && JucePlugin_WantsMidiInput
+ constexpr bool kMidiControl = true;
+#else
+ constexpr bool kMidiControl = false;
+#endif
 
 class OmniChainProcessor : public juce::AudioProcessor, private juce::Timer
 {
@@ -19,7 +28,7 @@ public:
     bool hasEditor() const override { return true; }
 
     const juce::String getName() const override { return JucePlugin_Name; }
-    bool acceptsMidi() const override { return false; }
+    bool acceptsMidi() const override { return kMidiControl; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 10.0; }
@@ -109,13 +118,53 @@ public:
     juce::File lastRecording;
     static juce::File getRecordingsFolder();
 
+    // ---- MIDI learn (only active in the OmniChain MIDI build; message thread unless noted) ----
+    // Learn: touch a knob or switch in OmniChain, then press a footswitch / move a pedal (any MIDI CC).
+    // Program Change n picks preset n: the factory presets first, then your own presets in name order.
+    // Links are saved for this computer, so the same footswitch works in every project and preset.
+    bool hasMidiControl() const { return kMidiControl; }
+    void startMidiLearn() { midiLearn.store (kLearnWaitControl); }
+    void cancelMidiLearn() { midiLearn.store (kLearnOff); }
+    int getMidiLearnStage() const { const int t = midiLearn.load(); return t == kLearnOff ? 0 : (t == kLearnWaitControl ? 1 : 2); }
+    juce::String getMidiLearnTargetName() const { const int t = midiLearn.load(); return t >= 0 ? describeParam (t) : juce::String(); }
+    juce::String getMidiStatus();                   // short line for the header ("" when nothing to show)
+    struct MidiLinkInfo { int cc; juce::String target; bool isSwitch, follow; };
+    juce::Array<MidiLinkInfo> getMidiLinks() const;
+    void forgetMidiLink (int cc);
+    void forgetAllMidiLinks();
+    void setMidiLinkFollow (int cc, bool follow);   // switches: true = follow a latching switch, false = each press toggles
+    juce::String describeParam (int paramIndex) const;
+
     juce::AudioProcessorValueTreeState apvts;
     oc::Engine engine;
     juce::String currentPresetName { "Init (empty chain)" };
     double cleanChecksum = 0.0;
 
 private:
-    void timerCallback() override { engine.service(); }
+    void timerCallback() override { engine.service(); serviceMidi(); }
+
+    // MIDI learn state (shared with the audio thread)
+    static constexpr int kLearnOff = -1, kLearnWaitControl = -2;
+    std::atomic<int> midiLearn { kLearnOff };      // kLearnOff, kLearnWaitControl, or the parameter index waiting for a CC
+    std::array<std::atomic<int>, 128> ccTarget;    // parameter index per CC number, -1 = none
+    std::array<std::atomic<bool>, 128> ccFollow;   // switch links: follow the CC value instead of toggling on each press
+    std::atomic<int> pendingProgram { -1 }, lastLearnedCc { -1 };
+    std::atomic<bool> midiLinksDirty { false };
+    juce::uint32 learnedShownUntil = 0;
+    std::vector<char> paramIsBypass;               // per parameter index: a slot's on/off switch (filled once, read-only after)
+    void handleMidi (const juce::MidiBuffer& midi);     // audio thread
+    void serviceMidi();                                 // message thread (timer)
+    void loadMidiLinks();
+    void saveMidiLinks();
+    bool isMidiLinkable (int paramIndex) const;
+    struct GestureWatcher : juce::AudioProcessorListener
+    {
+        explicit GestureWatcher (OmniChainProcessor& p) : owner (p) {}
+        void audioProcessorParameterChanged (juce::AudioProcessor*, int, float) override {}
+        void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails&) override {}
+        void audioProcessorParameterChangeGestureBegin (juce::AudioProcessor*, int index) override;
+        OmniChainProcessor& owner;
+    } gestureWatcher { *this };
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     void setParamValue (juce::RangedAudioParameter* p, float normalised);
     void setSlotPath (int slot, const juce::String& path);

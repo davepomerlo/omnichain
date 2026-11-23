@@ -1188,11 +1188,46 @@ void OmniChainPanel::showMoreMenu()
     m.addItem (11, "Downloads folder to watch for captures: " + OmniChainProcessor::getInboxFolder().getFileName() + "...");
     const auto lib = OmniChainProcessor::getLibraryFolder();
     m.addItem (12, lib.isDirectory() ? "Open the factory library folder" : "Factory library not found: set it up from a NAM slot's Load menu", lib.isDirectory());
+    if (proc.hasMidiControl())
+    {
+        // footswitch / expression pedal links (OmniChain MIDI build); ids 20-21, 100+cc forget, 300+cc toggle, 500+cc follow
+        PopupMenu midi;
+        if (proc.getMidiLearnStage() > 0) midi.addItem (20, "Cancel MIDI learn");
+        else midi.addItem (20, "Learn: touch a knob or switch, then press a footswitch / move a pedal");
+        const auto links = proc.getMidiLinks();
+        if (! links.isEmpty())
+        {
+            midi.addSectionHeader ("Linked controls");
+            for (auto& l : links)
+            {
+                PopupMenu one;
+                if (l.isSwitch)
+                {
+                    one.addItem (300 + l.cc, "Each press toggles (momentary footswitch)", true, ! l.follow);
+                    one.addItem (500 + l.cc, "Follows the switch (latching footswitch)", true, l.follow);
+                    one.addSeparator();
+                }
+                one.addItem (100 + l.cc, "Forget this link");
+                midi.addSubMenu ("CC " + String (l.cc) + ": " + l.target, one);
+            }
+            midi.addSeparator();
+            midi.addItem (21, "Forget all MIDI links");
+        }
+        midi.addSeparator();
+        midi.addItem (22, "Program Change 1-" + String ((int) getFactoryPresets().size() + userPresets.size()) + " picks presets (factory, then yours)", false);
+        m.addSeparator();
+        m.addSubMenu ("MIDI footswitch & expression pedal", midi);
+    }
     SafePointer<OmniChainPanel> safe (this);
     m.showMenuAsync (PopupMenu::Options().withTargetComponent (&loadBtn), [safe] (int r)
     {
         if (safe == nullptr || r == 0) return;
         auto& pr = safe->proc;
+        if (r == 20) { if (pr.getMidiLearnStage() > 0) pr.cancelMidiLearn(); else pr.startMidiLearn(); return; }
+        if (r == 21) { pr.forgetAllMidiLinks(); return; }
+        if (r >= 100 && r < 228) { pr.forgetMidiLink (r - 100); return; }
+        if (r >= 300 && r < 428) { pr.setMidiLinkFollow (r - 300, false); return; }
+        if (r >= 500 && r < 628) { pr.setMidiLinkFollow (r - 500, true); return; }
         const auto cur = pr.userPresetFile (pr.currentPresetName);
         switch (r)
         {
@@ -1294,6 +1329,11 @@ void OmniChainPanel::timerCallback()
     const float i = proc.engine.takeInPeak(), o = proc.engine.takeOutPeak();
     inLvl = jmax (i, inLvl * decay); outLvl = jmax (o, outLvl * decay);
     repaint (getWidth() - 46, 10, 40, 60);
+    if (proc.hasMidiControl())
+    {
+        const auto st = proc.getMidiStatus();
+        if (st != shownMidiStatus) { shownMidiStatus = st; repaint (0, 60, getWidth(), 20); }
+    }
     const String nm = proc.currentPresetName + (proc.isModified() ? "  (edited)" : "");
     if (nm != shownPreset) { shownPreset = nm; presetBox.setText (nm, dontSendNotification); }
 }
@@ -1310,6 +1350,12 @@ void OmniChainPanel::paint (Graphics& g)
     g.setFont (Font (12.0f));
     g.setColour (ocui::textDim);
     g.drawText ("modular multi-fx  |  65 effects  |  NAM + IR library  |  0 samples latency", 22, 46, 360, 16, Justification::centredLeft);
+    if (shownMidiStatus.isNotEmpty())    // MIDI learn prompts (OmniChain MIDI build)
+    {
+        g.setColour (Colour (0xffffc94d));
+        g.setFont (Font (12.0f, Font::bold));
+        g.drawFittedText (shownMidiStatus, 22, 62, getWidth() - 22 - 280, 15, Justification::centredLeft, 1, 0.8f);
+    }
 
     // meters
     auto drawMeter = [&] (int x, float lvl, const char* lbl)
