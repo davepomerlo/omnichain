@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include "MidiMap.h"
 #include "dsp/Engine.h"
 #include "Presets.h"
 
@@ -19,7 +20,7 @@ public:
     bool hasEditor() const override { return true; }
 
     const juce::String getName() const override { return JucePlugin_Name; }
-    bool acceptsMidi() const override { return false; }
+    bool acceptsMidi() const override { return wrapperType == wrapperType_Standalone; }   // footswitches in the app; plugins stay audio-only
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 10.0; }
@@ -90,10 +91,23 @@ public:
     bool isStandalone() const { return wrapperType == wrapperType_Standalone; }
     std::atomic<float> hostlessBpm { 120.0f };   // tempo used when the host gives none (standalone app)
     std::atomic<bool> hostHasTempo { false };
+
+    // ---- MIDI footswitches / pedals (standalone app) ----
+    MidiMap midiMap;
+    juce::String describeMidiTarget (const juce::String& target);
+    void startMidiLearn (const juce::String& target);
+    void forgetMidi (const juce::String& target);
+    void saveMidiMap();
+    void loadMidiMap();
+    void handleMidiEvents();                      // message thread
+    void stepPreset (int delta);                  // next / previous in the preset list (factory, then yours)
+    void tapTempo (double nowMs);
+    static juce::String getGlobalSetting (const juce::String& key);
+    static void setGlobalSetting (const juce::String& key, const juce::String& value);
     std::atomic<float> currentBpm { 120.0f };     // tempo of the last audio block (DAW or app)
 
     // ---- delay helpers ----
-    float tapDelay (int slot);                   // returns the tapped interval in ms (0 until two taps)
+    float tapDelay (int slot, double nowMs = 0.0);   // returns the tapped interval in ms (0 until two taps)
     bool setDelayFromText (int slot, const juce::String& text);   // "375 ms", "1.2 s", "1/8D", "92.5 bpm"
     void setTwist (int slot, bool on) { engine.sendCommand (slot, on ? 1 : 2); }
     bool getTrails() const { return engine.trails.load(); }
@@ -125,7 +139,11 @@ private:
     void reloadResourcesFromState();
     std::shared_ptr<const oc::Resource> loadIr (const juce::File& f, juce::String& error);
     juce::String slotError[oc::kNumSlots];
-    juce::Array<double> tapTimes[oc::kNumSlots];
+    juce::Array<double> tapTimes[oc::kNumSlots], tempoTaps;
+    bool twistLatched[oc::kNumSlots] = {};
+    void runMidiAction (const MidiBinding& b, float value, bool press, bool down, double timeMs);
+    struct MidiTimer : juce::Timer { OmniChainProcessor& p; explicit MidiTimer (OmniChainProcessor& o) : p (o) {} void timerCallback() override { p.handleMidiEvents(); } };
+    MidiTimer midiTimer { *this };
     juce::AudioFormatManager formats;
 
     int currentProgram = 0;

@@ -6,7 +6,7 @@ if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES)
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "" FORCE)
 endif()
 
-project(OmniChain VERSION 2.3.3 LANGUAGES C CXX)
+project(OmniChain VERSION 2.4.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -71,6 +71,7 @@ target_sources(OmniChain PRIVATE
     Source/dsp/EffectInfo.cpp
     Source/dsp/Effects.cpp
     Source/dsp/NamEffect.cpp
+    Source/MidiMap.cpp
     Source/dsp/Engine.cpp)
 
 target_compile_definitions(OmniChain PUBLIC
@@ -121,7 +122,7 @@ if(OMNICHAIN_TESTS)
     juce_add_console_app(OmniChainHostTest PRODUCT_NAME "OmniChainHostTest")
     juce_generate_juce_header(OmniChainHostTest)
     target_sources(OmniChainHostTest PRIVATE tests/HostTest.cpp
-        Source/PluginProcessor.cpp Source/PluginEditor.cpp Source/Presets.cpp
+        Source/PluginProcessor.cpp Source/PluginEditor.cpp Source/Presets.cpp Source/MidiMap.cpp
         Source/dsp/EffectInfo.cpp Source/dsp/Effects.cpp Source/dsp/NamEffect.cpp Source/dsp/Engine.cpp)
     target_compile_definitions(OmniChainHostTest PRIVATE JucePlugin_Name="OmniChain"
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_ALSA=0 JUCE_JACK=0 JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_DISPLAY_SPLASH_SCREEN=0)

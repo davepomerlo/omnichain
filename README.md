@@ -79,6 +79,24 @@ cp -r OmniChain.vst3 ~/.vst3/ && cp -r OmniChain.lv2 ~/.lv2/ && cp OmniChain.cla
 The standalone app (`OmniChain.exe` / `OmniChain.app` / `OmniChain`) lets you plug your guitar interface in and play with no DAW needed.
 Set the audio device under *Options → Audio/MIDI settings*.
 
+## New in 2.4
+
+* **MIDI footswitches and expression pedals in the OmniChain app.** Plug in any MIDI foot controller (or a MIDI keyboard
+  or knob box) and map it in a few seconds:
+  1. **Right-click** the control you want: a slot's power button, any knob, the Delay's **Tap** or **Twist**, the Looper's
+     buttons, the preset **<** **>** arrows, Input / Mix / Output, or Tap, Metronome, Tuner and Record in the top bar.
+  2. Choose **MIDI learn**, then press the footswitch or move the pedal. Done.
+  * **Footswitches** switch effects on and off, step presets, tap tempo, and drive the Looper. Twist is held as long as you hold the switch.
+  * **Expression pedals** sweep any knob, for example the Wah, a delay's Feedback, or the global Mix.
+  * **Latching pedals** (the ones that send *on* with one press and *off* with the next): right-click the control, or open
+    **MIDI** in the top bar, and tick **Latching pedal**.
+  * **Program Change** messages pick presets (factory first, then yours). Switch this off in the **MIDI** menu.
+  * The **MIDI** button lists every mapping (change or remove them) and shows the last MIDI message received, which helps
+    when a pedal doesn't seem to respond. MIDI devices are switched on automatically; you can see them under Audio settings.
+  * Mappings belong to your rig, not to a preset: they stay the same whichever preset you load, and are remembered next time.
+  * Inside a DAW, use the DAW's own MIDI learn / automation as before. Every knob, power button and the Looper's
+    Footswitch are automatable there.
+
 ## New in 2.3
 
 * **Type exact values.** Click the value under any knob and type it: `375`, `437.5 ms`, `1.5 s`, `6k`, `-3 dB`, `40%`,
@@ -279,6 +297,7 @@ expression pedal. Any other knob can be linked the same way, for example Freeze 
 | New in 2.1 | **Prism Shifter**, **Dream Loop**, **Microverse**, plus the redesigned **Looper** |
 | New in 2.2 | **Delay** rebuilt with 15 types (Flashback 2 X4 / DD-8 inspired), Tap, Twist and trails |
 | New in 2.3 | Typed knob values, typed delay time / tempo, offline-first TONE3000 downloads inbox |
+| New in 2.4 | MIDI learn for footswitches and expression pedals in the standalone app |
 | Loaders | **NAM Capture** (Neural Amp Modeler `.nam`), **Cab IR Loader** (`.wav/.aif/.flac`, zero-latency partitioned convolution) |
 
 ### About "zero latency"

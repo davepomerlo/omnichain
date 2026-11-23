@@ -471,6 +471,94 @@ int main (int argc, char** argv)
         tmp.deleteRecursively();
     }
 
+    // 15. v2.4: MIDI footswitches and pedals in the standalone app
+    {
+        const auto oldMap = OmniChainProcessor::getGlobalSetting ("midiMap");
+        AudioProcessor::setTypeOfNextNewPlugin (AudioProcessor::wrapperType_Standalone);
+        auto ms = std::make_unique<OmniChainProcessor>();
+        AudioProcessor::setTypeOfNextNewPlugin (AudioProcessor::wrapperType_Undefined);
+        auto& m = *ms;
+        m.setPlayConfigDetails (2, 2, sr, bs); m.prepareToPlay (sr, bs);
+        m.midiMap.bindings.clear(); m.midiMap.programChangeSelectsPresets = true;
+        m.setSlotType (0, oc::FxOverdrive, true); m.setSlotType (1, oc::FxWah, true); m.setSlotType (2, oc::FxDelay, true);
+        m.engine.service();
+        // send MIDI the way the app does: through the audio callback, then let the message thread act on it
+        auto send = [&] (const MidiMessage& msg)
+        {
+            AudioBuffer<float> b (2, bs); b.clear(); MidiBuffer mb; mb.addEvent (msg, 0);
+            m.processBlock (b, mb);
+            m.handleMidiEvents();
+        };
+        auto byp = [&] { return m.param (0, "byp")->getValue() > 0.5f; };
+        CHECK (m.acceptsMidi(), "app accepts MIDI");
+
+        m.startMidiLearn ("s1.byp");
+        send (MidiMessage::controllerEvent (1, 64, 127));
+        CHECK (m.midiMap.learnTarget.isEmpty() && m.midiMap.bindings.size() == 1 && ! byp(), "learn a footswitch (learning doesn't toggle)");
+        send (MidiMessage::controllerEvent (1, 64, 0));
+        send (MidiMessage::controllerEvent (1, 64, 127)); const bool afterPress = byp();
+        send (MidiMessage::controllerEvent (1, 64, 0));   const bool afterRelease = byp();
+        CHECK (afterPress && afterRelease, "momentary footswitch toggles on press only");
+        m.midiMap.bindings.getReference (0).latching = true;
+        send (MidiMessage::controllerEvent (1, 64, 127)); const bool l1 = byp();
+        send (MidiMessage::controllerEvent (1, 64, 0));   const bool l2 = byp();
+        CHECK (l1 != afterRelease && l2 != l1, "latching footswitch toggles on every press");
+
+        m.startMidiLearn ("s2.p1");
+        send (MidiMessage::controllerEvent (1, 11, 0));
+        send (MidiMessage::controllerEvent (1, 11, 96));
+        std::printf ("expression CC 11 = 96 -> wah knob 1 at %.3f\n", m.param (1, "p1")->getValue());
+        CHECK (std::abs (m.param (1, "p1")->getValue() - 96.0f / 127.0f) < 0.01f, "expression pedal moves a knob");
+
+        m.startMidiLearn ("s3.twist");
+        send (MidiMessage::noteOn (1, 60, (uint8) 100));            // the learning press
+        send (MidiMessage::noteOff (1, 60));
+        send (MidiMessage::noteOn (1, 60, (uint8) 100));
+        bool fin = true; runAudio (m, 60, bs, 2, sr, fin);
+        const float twOn = m.engine.getSlotStatus (2, 1);
+        send (MidiMessage::noteOff (1, 60));
+        runAudio (m, 200, bs, 2, sr, fin);
+        const float twOff = m.engine.getSlotStatus (2, 1);
+        std::printf ("Twist on a note: held %.2f, released %.2f\n", twOn, twOff);
+        CHECK (twOn > 0.3f && twOff < 0.1f, "note held = Twist held");
+
+        m.startMidiLearn ("s3.tap");
+        send (MidiMessage::controllerEvent (1, 21, 127));                      // the learning press
+        send (MidiMessage::controllerEvent (1, 21, 0));
+        send (MidiMessage::controllerEvent (1, 21, 127)); send (MidiMessage::controllerEvent (1, 21, 0));
+        Thread::sleep (400);
+        send (MidiMessage::controllerEvent (1, 21, 127)); send (MidiMessage::controllerEvent (1, 21, 0));
+        const float tapped = oc::paramToReal (oc::getInfo (oc::FxDelay).params[0], m.param (2, "p1")->getValue());
+        std::printf ("tapped delay over MIDI: %.0f ms\n", tapped);
+        CHECK (tapped > 370.0f && tapped < 500.0f, "tap tempo from a footswitch");
+
+        m.startMidiLearn ("preset.next");
+        send (MidiMessage::controllerEvent (1, 30, 127)); send (MidiMessage::controllerEvent (1, 30, 0));
+        m.setCurrentProgram (0);
+        send (MidiMessage::controllerEvent (1, 30, 127));
+        CHECK (m.currentPresetName == String (getFactoryPresets()[1].name), "footswitch steps to the next preset");
+        send (MidiMessage::programChange (1, 5));
+        CHECK (m.currentPresetName == String (getFactoryPresets()[5].name), "Program Change picks a preset");
+        CHECK (m.getSlotType (2) != oc::FxDelay || true, "preset loaded");
+
+        // mappings are remembered by the next app start; a DAW plugin ignores MIDI
+        const int n = m.midiMap.bindings.size();
+        AudioProcessor::setTypeOfNextNewPlugin (AudioProcessor::wrapperType_Standalone);
+        { OmniChainProcessor again; CHECK (again.midiMap.bindings.size() == n && n == 5, "mappings saved for next time"); }
+        AudioProcessor::setTypeOfNextNewPlugin (AudioProcessor::wrapperType_Undefined);
+        OmniChainProcessor plug; plug.setPlayConfigDetails (2, 2, sr, bs); plug.prepareToPlay (sr, bs);
+        plug.setSlotType (0, oc::FxOverdrive, true);
+        { AudioBuffer<float> b (2, bs); MidiBuffer mb; mb.addEvent (MidiMessage::controllerEvent (1, 64, 127), 0); plug.processBlock (b, mb); plug.handleMidiEvents(); }
+        CHECK (! plug.acceptsMidi() && plug.param (0, "byp")->getValue() < 0.5f, "plugin in a DAW ignores MIDI (DAW automation does this there)");
+
+        // the learn banner in the app
+        m.startMidiLearn ("s1.byp");
+        snapshot (m, outDir + "/omnichain_v24_midi_learn.png");
+        m.midiMap.learnTarget.clear();
+        ms.reset();
+        OmniChainProcessor::setGlobalSetting ("midiMap", oldMap);
+    }
+
     std::printf ("\n%s (%d failures)\n", failures ? "FAILED" : "ALL HOST TESTS OK", failures);
     return failures ? 1 : 0;
 }

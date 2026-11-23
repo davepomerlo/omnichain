@@ -3,6 +3,20 @@
 #include "PluginProcessor.h"
 #include "dsp/Tuner.h"
 
+// Any control with a right-click hook (used for MIDI learn); a right-click never changes the control itself
+template <class Base>
+class RightClickable : public Base
+{
+public:
+    using Base::Base;
+    std::function<void()> onRightClick;
+    void mouseDown (const juce::MouseEvent& e) override { if (e.mods.isPopupMenu() && onRightClick) { onRightClick(); return; } Base::mouseDown (e); }
+    void mouseDrag (const juce::MouseEvent& e) override { if (e.mods.isPopupMenu() && onRightClick) return; Base::mouseDrag (e); }
+    void mouseUp (const juce::MouseEvent& e) override   { if (e.mods.isPopupMenu() && onRightClick) return; Base::mouseUp (e); }
+};
+using RCButton = RightClickable<juce::TextButton>;
+
+
 namespace ocui
 {
 const juce::Colour bg0 { 0xff111318 }, bg1 { 0xff1a1d25 }, card { 0xff20242d }, cardHi { 0xff272c37 },
@@ -26,7 +40,7 @@ class Knob : public juce::Component
 public:
     Knob();
     void resized() override;
-    juce::Slider slider;
+    RightClickable<juce::Slider> slider;
     juce::Label name, value;
     void setAccent (juce::Colour c);
     // click the value to type one; parser turns text into the slider's value (false = not understood)
@@ -35,6 +49,9 @@ public:
 } // namespace ocui
 
 class OmniChainPanel;
+
+// right-click menu for MIDI learn (standalone app only); target as in MidiMap ("s3.byp", "s3.p2", "preset.next"...)
+void enableMidiLearn (OmniChainProcessor& proc, std::function<void()>& hook, juce::String target);
 
 // Buttons, timer and progress bar for a Looper slot
 class LooperPanel : public juce::Component, private juce::Timer
@@ -48,7 +65,7 @@ private:
     void timerCallback() override;
     OmniChainProcessor& proc;
     const int slot;
-    juce::TextButton mainBtn { "Record" }, playBtn { "Play" }, undoBtn { "Undo" }, clearBtn { "Clear" };
+    RCButton mainBtn { "Record" }, playBtn { "Play" }, undoBtn { "Undo" }, clearBtn { "Clear" };
     int state = -1; float len = 0, pos = 0; int flags = 0;
 };
 
@@ -75,8 +92,8 @@ private:
     void timerCallback() override;
     OmniChainProcessor& proc;
     const int slot;
-    juce::TextButton tapBtn { "Tap" };
-    HoldButton twistBtn { "Twist" };
+    RCButton tapBtn { "Tap" };
+    RightClickable<HoldButton> twistBtn { "Twist" };
     juce::Label readout;                 // click to type a time, a division or a tempo
     juce::String shownText;
     float shownTw = -1.0f, flash = 0.0f;
@@ -129,7 +146,8 @@ private:
     juce::Colour accent;
 
     juce::ComboBox typeBox;
-    juce::TextButton power { "" }, left { "<" }, right { ">" };
+    RCButton power { "" };
+    juce::TextButton left { "<" }, right { ">" };
     ocui::Knob knobs[oc::kParamsPerSlot];
     juce::Slider mix, level;
     juce::Label mixLabel, levelLabel, blurb, fileLabel;
@@ -172,8 +190,9 @@ private:
     void timerCallback() override;
     void tap();
     OmniChainProcessor& proc;
-    juce::TextButton audioBtn { "Audio settings" }, inputBtn { "Input" }, tapBtn { "Tap" }, metroBtn { "Metronome" },
-                     tunerBtn { "Tuner" }, recBtn { "Record" }, folderBtn { "Recordings" };
+    juce::TextButton audioBtn { "Audio settings" }, inputBtn { "Input" }, folderBtn { "Recordings" }, midiBtn { "MIDI" };
+    RCButton tapBtn { "Tap" }, metroBtn { "Metronome" }, tunerBtn { "Tuner" }, recBtn { "Record" };
+    void showMidiMenu();
     juce::Slider bpm, metroVol;
     juce::Label recTime;
     juce::Array<double> taps;
@@ -205,13 +224,16 @@ public:
     void showScale (float s);
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int, int) override;
+    void mouseUp (const juce::MouseEvent& e) override { if (e.eventComponent == &learnBanner) proc.midiMap.learnTarget.clear(); }
 private:
 
     OmniChainProcessor& proc;
     ocui::LookAndFeel lnf;
     std::unique_ptr<SlotCard> cards[oc::kNumSlots];
     juce::ComboBox presetBox;
-    juce::TextButton prevBtn { "<" }, nextBtn { ">" }, saveBtn { "Save" }, loadBtn { "More" };
+    RCButton prevBtn { "<" }, nextBtn { ">" };
+    juce::TextButton saveBtn { "Save" }, loadBtn { "More" };
+    juce::Label learnBanner;
     juce::ComboBox sizeBox;
     ocui::Knob inKnob, mixKnob, outKnob;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> inAtt, mixAtt, outAtt;

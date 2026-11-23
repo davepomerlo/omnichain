@@ -30,11 +30,13 @@ OmniChainProcessor::OmniChainProcessor()
     formats.registerBasicFormats();
     markClean();
     startTimerHz (40);
+    if (isStandalone()) { loadMidiMap(); midiTimer.startTimerHz (100); }
 }
 
 OmniChainProcessor::~OmniChainProcessor()
 {
     stopTimer();
+    midiTimer.stopTimer();
     stopRecording();
 }
 
@@ -101,8 +103,13 @@ bool OmniChainProcessor::isBusesLayoutSupported (const BusesLayout& layouts) con
     return in.size() <= out.size();
 }
 
-void OmniChainProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
+void OmniChainProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& midi)
 {
+    if (isStandalone() && ! midi.isEmpty())
+    {
+        const double now = Time::getMillisecondCounterHiRes();
+        for (const auto meta : midi) midiMap.push (meta.getMessage(), now);   // acted on by the message thread
+    }
     ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
     const int numIn = getTotalNumInputChannels(), numOut = getTotalNumOutputChannels();
@@ -278,10 +285,10 @@ void OmniChainProcessor::migrateSlot (int s, int fromVersion)
 // ------------------------------------------------------------------ delay tap tempo
 // Tap twice or more: free time -> the taps set the delay time; synced -> they set the tempo
 // (or, when the host owns the tempo, the delay switches to free time at tapped quarter x subdivision).
-float OmniChainProcessor::tapDelay (int slot)
+float OmniChainProcessor::tapDelay (int slot, double nowMs)
 {
     if (getSlotType (slot) != oc::FxDelay) return 0.0f;
-    const double now = Time::getMillisecondCounterHiRes();
+    const double now = nowMs > 0.0 ? nowMs : Time::getMillisecondCounterHiRes();
     auto& t = tapTimes[slot];
     if (! t.isEmpty() && now - t.getLast() > 2500.0) t.clearQuick();
     t.add (now);
@@ -896,6 +903,9 @@ void OmniChainProcessor::setUiScale (float s)
 }
 
 // ------------------------------------------------------------------ NAM size / imports
+String OmniChainProcessor::getGlobalSetting (const String& key) { return globalSettings().getValue (key); }
+void OmniChainProcessor::setGlobalSetting (const String& key, const String& value) { globalSettings().setValue (key, value); }
+
 bool OmniChainProcessor::getNamLight() { return globalSettings().getBoolValue ("namLight", true); }
 
 void OmniChainProcessor::setNamLight (bool on)

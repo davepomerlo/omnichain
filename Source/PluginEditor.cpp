@@ -151,6 +151,42 @@ void Knob::setAccent (Colour c) { slider.setColour (Slider::rotarySliderFillColo
 } // namespace ocui
 
 // =====================================================================================
+// MIDI learn menu (standalone app): right-click a knob or button
+void enableMidiLearn (OmniChainProcessor& proc, std::function<void()>& hook, String target)
+{
+    if (! proc.isStandalone()) return;
+    auto* pp = &proc;
+    hook = [pp, target]
+    {
+        auto& pr = *pp;
+        const int idx = pr.midiMap.indexForTarget (target);
+        const auto kind = MidiMap::kindOf (target);
+        PopupMenu m;
+        m.addSectionHeader (pr.describeMidiTarget (target));
+        if (idx >= 0)
+        {
+            const auto& b = pr.midiMap.bindings.getReference (idx);
+            m.addItem (1, "MIDI learn again (now: " + MidiMap::describeSource (b) + ")");
+            if (kind != MidiTargetKind::Continuous && b.source != MidiBinding::Program)
+                m.addItem (3, "Latching pedal (sends on / off on alternate presses)", true, b.latching);
+            m.addItem (2, "Forget this MIDI mapping");
+        }
+        else
+            m.addItem (1, kind == MidiTargetKind::Continuous ? "MIDI learn: move an expression pedal or knob" : "MIDI learn: press a footswitch");
+        m.showMenuAsync (PopupMenu::Options(), [pp, target] (int r)
+        {
+            if (r == 1) pp->startMidiLearn (target);
+            else if (r == 2) pp->forgetMidi (target);
+            else if (r == 3)
+            {
+                const int i = pp->midiMap.indexForTarget (target);
+                if (i >= 0) { auto& b = pp->midiMap.bindings.getReference (i); b.latching = ! b.latching; b.last = -1.0f; pp->saveMidiMap(); }
+            }
+        });
+    };
+}
+
+// =====================================================================================
 SlotCard::SlotCard (OmniChainProcessor& p, OmniChainPanel& e, int i) : proc (p), editor (e), index (i)
 {
     typeBox.addItem (oc::getInfo (0).name, 1);
@@ -233,6 +269,9 @@ SlotCard::SlotCard (OmniChainProcessor& p, OmniChainPanel& e, int i) : proc (p),
         addAndMakeVisible (knobs[k]);
         knobAtt[k] = std::make_unique<SA> (st, OmniChainProcessor::pid (index, "p" + String (k + 1)), knobs[k].slider);
     }
+    const String sl = "s" + String (index + 1);
+    for (int k = 0; k < oc::kParamsPerSlot; ++k) enableMidiLearn (proc, knobs[k].slider.onRightClick, sl + ".p" + String (k + 1));
+    enableMidiLearn (proc, power.onRightClick, sl + ".byp");
     mixAtt = std::make_unique<SA> (st, OmniChainProcessor::pid (index, "mix"), mix);
     levelAtt = std::make_unique<SA> (st, OmniChainProcessor::pid (index, "lvl"), level);
     powerAtt = std::make_unique<BA> (st, OmniChainProcessor::pid (index, "byp"), power);
@@ -708,6 +747,11 @@ LooperPanel::LooperPanel (OmniChainProcessor& p, int s) : proc (p), slot (s)
     playBtn.onClick  = [this] { proc.engine.sendCommand (slot, (state == 3 || state == 4) ? 2 : 3); };
     undoBtn.onClick  = [this] { proc.engine.sendCommand (slot, 4); };
     clearBtn.onClick = [this] { proc.engine.sendCommand (slot, 5); };
+    const String sl = "s" + String (slot + 1) + ".loop.";
+    enableMidiLearn (proc, mainBtn.onRightClick, sl + "main");
+    enableMidiLearn (proc, playBtn.onRightClick, sl + "play");
+    enableMidiLearn (proc, undoBtn.onRightClick, sl + "undo");
+    enableMidiLearn (proc, clearBtn.onRightClick, sl + "clear");
     mainBtn.setTooltip ("Record, then close the loop, then overdub. A MIDI footswitch on the Footswitch knob does the same: double-tap stops, hold 1 s undoes.");
     undoBtn.setTooltip ("Undo the last overdub (press again to redo)");
     clearBtn.setTooltip ("Erase the loop");
@@ -793,6 +837,8 @@ DelayBar::DelayBar (OmniChainProcessor& p, int s) : proc (p), slot (s)
     };
     addAndMakeVisible (readout);
     tapBtn.onClick = [this] { proc.tapDelay (slot); flash = 1.0f; };
+    enableMidiLearn (proc, tapBtn.onRightClick, "s" + String (slot + 1) + ".tap");
+    enableMidiLearn (proc, twistBtn.onRightClick, "s" + String (slot + 1) + ".twist");
     twistBtn.onHold = [this] (bool down) { proc.setTwist (slot, down); };
 }
 
@@ -911,8 +957,14 @@ void TunerOverlay::paint (Graphics& g)
 // =====================================================================================
 StandaloneBar::StandaloneBar (OmniChainProcessor& p) : proc (p)
 {
-    for (auto* b : { &audioBtn, &inputBtn, &tapBtn, &metroBtn, &tunerBtn, &recBtn, &folderBtn }) addAndMakeVisible (*b);
-    for (auto* b : { &inputBtn, &metroBtn, &tunerBtn, &recBtn })
+    for (auto* b : { (Button*) &audioBtn, (Button*) &inputBtn, (Button*) &tapBtn, (Button*) &metroBtn, (Button*) &tunerBtn, (Button*) &recBtn, (Button*) &folderBtn, (Button*) &midiBtn }) addAndMakeVisible (*b);
+    midiBtn.setTooltip ("MIDI footswitches and expression pedals: see and change your mappings. To map: right-click any knob or button.");
+    midiBtn.onClick = [this] { showMidiMenu(); };
+    enableMidiLearn (proc, tapBtn.onRightClick, "tempo.tap");
+    enableMidiLearn (proc, metroBtn.onRightClick, "metronome");
+    enableMidiLearn (proc, tunerBtn.onRightClick, "tuner");
+    enableMidiLearn (proc, recBtn.onRightClick, "record");
+    for (juce::TextButton* b : { (juce::TextButton*) &inputBtn, (juce::TextButton*) &metroBtn, (juce::TextButton*) &tunerBtn, (juce::TextButton*) &recBtn })
     {
         b->setClickingTogglesState (true);
         b->setColour (TextButton::buttonOnColourId, Colour (0xff35518a));
@@ -976,15 +1028,48 @@ StandaloneBar::StandaloneBar (OmniChainProcessor& p) : proc (p)
 
 void StandaloneBar::tap()
 {
-    const double now = Time::getMillisecondCounterHiRes();
-    if (! taps.isEmpty() && now - taps.getLast() > 2000.0) taps.clear();
-    taps.add (now);
-    while (taps.size() > 5) taps.remove (0);
-    if (taps.size() >= 2)
+    proc.tapTempo (Time::getMillisecondCounterHiRes());
+    bpm.setValue (proc.hostlessBpm.load(), dontSendNotification);
+}
+
+// Everything about MIDI footswitches and pedals in one menu
+void StandaloneBar::showMidiMenu()
+{
+    auto& mm = proc.midiMap;
+    PopupMenu m;
+    m.addSectionHeader ("MIDI footswitches and pedals");
+    m.addItem (-1, "To map one: right-click any knob or button, choose MIDI learn, then press the switch", false);
+    if (mm.learnTarget.isNotEmpty()) m.addItem (3, "Cancel MIDI learn (" + proc.describeMidiTarget (mm.learnTarget) + ")");
+    m.addSeparator();
+    if (mm.bindings.isEmpty()) m.addItem (-1, "No mappings yet", false);
+    for (int i = 0; i < mm.bindings.size(); ++i)
     {
-        const double avg = (taps.getLast() - taps.getFirst()) / (taps.size() - 1);
-        bpm.setValue (jlimit (30.0, 300.0, std::round (60000.0 / avg)), sendNotificationSync);
+        const auto& b = mm.bindings.getReference (i);
+        PopupMenu sub;
+        if (MidiMap::kindOf (b.target) != MidiTargetKind::Continuous && b.source != MidiBinding::Program)
+            sub.addItem (1000 + i, "Latching pedal (on / off on alternate presses)", true, b.latching);
+        sub.addItem (2000 + i, "Learn again");
+        sub.addItem (3000 + i, "Remove");
+        m.addSubMenu (MidiMap::describeSource (b) + "  >  " + proc.describeMidiTarget (b.target), sub);
     }
+    m.addSeparator();
+    m.addItem (4, "Program Change messages pick presets", true, mm.programChangeSelectsPresets);
+    m.addItem (5, "Remove all mappings", ! mm.bindings.isEmpty());
+    m.addItem (6, "MIDI devices: Audio settings...");
+    m.addItem (-1, "Last MIDI received: " + (mm.lastReceived.isEmpty() ? String ("nothing yet") : mm.lastReceived), false);
+    SafePointer<StandaloneBar> safe (this);
+    m.showMenuAsync (PopupMenu::Options().withTargetComponent (&midiBtn), [safe] (int r)
+    {
+        if (safe == nullptr || r <= 0) return;
+        auto& pr = safe->proc; auto& map = pr.midiMap;
+        if (r == 3) map.learnTarget.clear();
+        else if (r == 4) { map.programChangeSelectsPresets = ! map.programChangeSelectsPresets; pr.saveMidiMap(); }
+        else if (r == 5) { map.bindings.clear(); pr.saveMidiMap(); }
+        else if (r == 6) safe->audioBtn.triggerClick();
+        else if (r >= 1000 && r < 2000 && isPositiveAndBelow (r - 1000, map.bindings.size())) { auto& b = map.bindings.getReference (r - 1000); b.latching = ! b.latching; b.last = -1.0f; pr.saveMidiMap(); }
+        else if (r >= 2000 && r < 3000 && isPositiveAndBelow (r - 2000, map.bindings.size())) pr.startMidiLearn (map.bindings.getReference (r - 2000).target);
+        else if (r >= 3000 && isPositiveAndBelow (r - 3000, map.bindings.size())) { map.bindings.remove (r - 3000); pr.saveMidiMap(); }
+    });
 }
 
 void StandaloneBar::timerCallback()
@@ -1025,11 +1110,12 @@ void StandaloneBar::resized()
     auto r = getLocalBounds().reduced (8, 6);
     audioBtn.setBounds (r.removeFromLeft (120)); r.removeFromLeft (8);
     inputBtn.setBounds (r.removeFromLeft (112)); r.removeFromLeft (22);
-    bpm.setBounds (r.removeFromLeft (230)); r.removeFromLeft (6);
+    bpm.setBounds (r.removeFromLeft (210)); r.removeFromLeft (6);
     tapBtn.setBounds (r.removeFromLeft (52)); r.removeFromLeft (22);
     metroBtn.setBounds (r.removeFromLeft (96)); r.removeFromLeft (6);
     metroVol.setBounds (r.removeFromLeft (90)); r.removeFromLeft (22);
-    tunerBtn.setBounds (r.removeFromLeft (72));
+    tunerBtn.setBounds (r.removeFromLeft (72)); r.removeFromLeft (8);
+    midiBtn.setBounds (r.removeFromLeft (64));
     folderBtn.setBounds (r.removeFromRight (100)); r.removeFromRight (8);
     recTime.setBounds (r.removeFromRight (56)); r.removeFromRight (22);
     recBtn.setBounds (r.removeFromRight (80));
@@ -1057,11 +1143,24 @@ OmniChainPanel::OmniChainPanel (OmniChainProcessor& p) : proc (p)
     addAndMakeVisible (presetBox);
     prevBtn.onClick = [this] { stepPreset (-1); };
     nextBtn.onClick = [this] { stepPreset (1); };
+    enableMidiLearn (proc, prevBtn.onRightClick, "preset.prev");
+    enableMidiLearn (proc, nextBtn.onRightClick, "preset.next");
+    enableMidiLearn (proc, inKnob.slider.onRightClick, "g.in");
+    enableMidiLearn (proc, mixKnob.slider.onRightClick, "g.mix");
+    enableMidiLearn (proc, outKnob.slider.onRightClick, "g.out");
+    learnBanner.setJustificationType (Justification::centred);
+    learnBanner.setFont (Font (13.0f, Font::bold));
+    learnBanner.setMinimumHorizontalScale (0.75f);
+    learnBanner.setColour (Label::backgroundColourId, Colour (0xff3f6fd1));
+    learnBanner.setColour (Label::textColourId, Colours::white);
+    learnBanner.setTooltip ("Click to cancel MIDI learn");
+    learnBanner.addMouseListener (this, false);
+    addChildComponent (learnBanner);
     saveBtn.onClick = [this] { savePreset(); };
     loadBtn.onClick = [this] { showMoreMenu(); };
     saveBtn.setTooltip ("Save this sound by name (it appears in the preset list)");
     loadBtn.setTooltip ("Rename, delete, import or export presets; delay trails and NAM CPU settings");
-    for (auto* b : { &prevBtn, &nextBtn, &saveBtn, &loadBtn }) addAndMakeVisible (*b);
+    for (juce::TextButton* b : { (juce::TextButton*) &prevBtn, (juce::TextButton*) &nextBtn, &saveBtn, &loadBtn }) addAndMakeVisible (*b);
     for (int pct : { 75, 90, 100, 115, 125, 150, 175, 200 }) sizeBox.addItem ("Size " + String (pct) + "%", pct);
     sizeBox.setTooltip ("Window size (you can also drag the bottom-right corner)");
     sizeBox.onChange = [this] { if (onScaleChosen && sizeBox.getSelectedId() > 0) onScaleChosen ((float) sizeBox.getSelectedId() / 100.0f); };
@@ -1280,6 +1379,19 @@ void OmniChainPanel::showScale (float sc)
 
 void OmniChainPanel::timerCallback()
 {
+    // MIDI learn banner (standalone app)
+    const auto& lt = proc.midiMap.learnTarget;
+    if (lt.isNotEmpty() != learnBanner.isVisible() || (lt.isNotEmpty() && ! learnBanner.getText().contains (proc.describeMidiTarget (lt))))
+    {
+        if (lt.isNotEmpty())
+        {
+            const bool cont = MidiMap::kindOf (lt) == MidiTargetKind::Continuous;
+            learnBanner.setText (String ("MIDI learn: ") + (cont ? "move a pedal or knob" : "press a footswitch") + " for \"" + proc.describeMidiTarget (lt) + "\"   (click to cancel)", dontSendNotification);
+            learnBanner.setBounds (getLocalBounds().removeFromTop (32).reduced (370, 4));
+            learnBanner.toFront (false);
+        }
+        learnBanner.setVisible (lt.isNotEmpty());
+    }
     // every ~4 s, while a NAM or IR slot is on screen, look for new captures in the Downloads folder (local only)
     if (++scanTicks >= 120)
     {
