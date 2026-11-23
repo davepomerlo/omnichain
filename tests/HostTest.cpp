@@ -549,7 +549,10 @@ int main (int argc, char** argv)
         OmniChainProcessor plug; plug.setPlayConfigDetails (2, 2, sr, bs); plug.prepareToPlay (sr, bs);
         plug.setSlotType (0, oc::FxOverdrive, true);
         { AudioBuffer<float> b (2, bs); MidiBuffer mb; mb.addEvent (MidiMessage::controllerEvent (1, 64, 127), 0); plug.processBlock (b, mb); plug.handleMidiEvents(); }
-        CHECK (! plug.acceptsMidi() && plug.param (0, "byp")->getValue() < 0.5f, "plugin in a DAW ignores MIDI (DAW automation does this there)");
+        if (kMidiControl)   // built as OmniChain MIDI (the macOS MIDI-controlled AU): same mappings as the app
+            CHECK (plug.acceptsMidi() && plug.param (0, "byp")->getValue() > 0.5f, "OmniChain MIDI uses the app's footswitch mappings");
+        else
+            CHECK (! plug.acceptsMidi() && plug.param (0, "byp")->getValue() < 0.5f, "plugin in a DAW ignores MIDI (DAW automation does this there)");
 
         // the learn banner in the app
         m.startMidiLearn ("s1.byp");

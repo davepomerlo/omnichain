@@ -4,6 +4,15 @@
 #include "dsp/Engine.h"
 #include "Presets.h"
 
+// "OmniChain MIDI" is the macOS Audio Unit that Logic Pro and MainStage list as a MIDI-controlled effect (aumf).
+// It is built with MIDI input, so footswitch / pedal mapping works there just as in the standalone app.
+// Every other plugin build takes no MIDI.
+#if defined (JucePlugin_WantsMidiInput) && JucePlugin_WantsMidiInput
+ constexpr bool kMidiControl = true;
+#else
+ constexpr bool kMidiControl = false;
+#endif
+
 class OmniChainProcessor : public juce::AudioProcessor, private juce::Timer
 {
 public:
@@ -20,7 +29,7 @@ public:
     bool hasEditor() const override { return true; }
 
     const juce::String getName() const override { return JucePlugin_Name; }
-    bool acceptsMidi() const override { return wrapperType == wrapperType_Standalone; }   // footswitches in the app; plugins stay audio-only
+    bool acceptsMidi() const override { return usesMidi(); }   // footswitches in the app and in OmniChain MIDI; other plugins stay audio-only
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 10.0; }
@@ -89,10 +98,11 @@ public:
 
     // ---- standalone-app helpers (also harmless inside a DAW) ----
     bool isStandalone() const { return wrapperType == wrapperType_Standalone; }
+    bool usesMidi() const { return isStandalone() || kMidiControl; }   // footswitch / pedal mapping is on
     std::atomic<float> hostlessBpm { 120.0f };   // tempo used when the host gives none (standalone app)
     std::atomic<bool> hostHasTempo { false };
 
-    // ---- MIDI footswitches / pedals (standalone app) ----
+    // ---- MIDI footswitches / pedals (standalone app and OmniChain MIDI) ----
     MidiMap midiMap;
     juce::String describeMidiTarget (const juce::String& target);
     void startMidiLearn (const juce::String& target);

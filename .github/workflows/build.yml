@@ -78,10 +78,10 @@ jobs:
             os: windows-latest
             platform: Windows
             targets: OmniChain_VST3 OmniChain_CLAP OmniChain_Standalone
-          - name: macOS universal (AU, VST3, CLAP, Standalone)
+          - name: macOS universal (AU, AU MIDI-controlled, VST3, CLAP, Standalone)
             os: macos-latest
             platform: macOS
-            targets: OmniChain_VST3 OmniChain_AU OmniChain_CLAP OmniChain_Standalone
+            targets: OmniChain_VST3 OmniChain_AU OmniChainMIDI_AU OmniChain_CLAP OmniChain_Standalone
           - name: Linux (VST3, LV2, CLAP, Standalone)
             os: ubuntu-22.04
             platform: Linux
@@ -200,22 +200,25 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           A=build/OmniChain_artefacts/Release
+          AM=build/OmniChainMIDI_artefacts/Release
           OUT=OmniChain-macOS
           mkdir -p $OUT
-          cp -R "$A/VST3/OmniChain.vst3" "$A/AU/OmniChain.component" "$A/CLAP/OmniChain.clap" "$A/Standalone/OmniChain.app" README.md "OmniChain Library" $OUT/
+          cp -R "$A/VST3/OmniChain.vst3" "$A/AU/OmniChain.component" "$AM/AU/OmniChain MIDI.component" "$A/CLAP/OmniChain.clap" "$A/Standalone/OmniChain.app" README.md "OmniChain Library" $OUT/
           # the app carries its own copy of the library inside the bundle (must be added before signing)
           cp -R "OmniChain Library" "$OUT/OmniChain.app/Contents/Resources/"
-          for b in $OUT/OmniChain.vst3 $OUT/OmniChain.component $OUT/OmniChain.clap $OUT/OmniChain.app; do
+          for b in "$OUT/OmniChain.vst3" "$OUT/OmniChain.component" "$OUT/OmniChain MIDI.component" "$OUT/OmniChain.clap" "$OUT/OmniChain.app"; do
             codesign --force --deep --sign - "$b"
           done
           lipo -info $OUT/OmniChain.component/Contents/MacOS/OmniChain
-          # Apple's Audio Unit validator
+          lipo -info "$OUT/OmniChain MIDI.component/Contents/MacOS/"*
+          # Apple's Audio Unit validator: the regular effect (aufx) and the MIDI-controlled effect (aumf)
           mkdir -p ~/Library/Audio/Plug-Ins/Components
-          cp -R $OUT/OmniChain.component ~/Library/Audio/Plug-Ins/Components/
+          cp -R $OUT/OmniChain.component "$OUT/OmniChain MIDI.component" ~/Library/Audio/Plug-Ins/Components/
           killall -9 AudioComponentRegistrar 2>/dev/null || true
           sleep 3
           auval -a | grep -i omni || true
           auval -strict -v aufx Omc1 Omch
+          auval -strict -v aumf Omcm Omch
           ditto -c -k --sequesterRsrc --keepParent $OUT OmniChain-macOS.zip
           # Drag-to-Applications disk image for the standalone app
           mkdir -p dmg && cp -R $OUT/OmniChain.app dmg/ && cp -R "OmniChain Library" dmg/ && ln -s /Applications dmg/Applications
