@@ -32,7 +32,7 @@ Get the latest version from the **Releases** page (right-hand side of the repo p
 | **OmniChain-Windows-Setup.exe** | Installer: app + optional VST3/CLAP | Easiest way on Windows |
 | **OmniChain-macOS-App.dmg** | The standalone Mac app | Play without a DAW on a Mac |
 | **OmniChain-Windows.zip** | `OmniChain.vst3`, `OmniChain.clap`, `OmniChain.exe` | FL Studio, Ableton Live, Cubase, Reaper, Studio One, Bitwig, Cakewalk, Reason, … |
-| **OmniChain-macOS.zip** (Apple Silicon + Intel, macOS 11+) | `OmniChain.component` (AU), `OmniChain.vst3`, `OmniChain.clap`, `OmniChain.app` | Logic Pro, GarageBand, MainStage (AU); Ableton, Cubase, Reaper, Studio One, Bitwig, FL Studio Mac (VST3) |
+| **OmniChain-macOS.zip** (Apple Silicon + Intel, macOS 11+) | `OmniChain.component` (AU), `OmniChain MIDI.component` (AU with MIDI learn, for Logic / MainStage), `OmniChain.vst3`, `OmniChain.clap`, `OmniChain.app` | Logic Pro, GarageBand, MainStage (AU); Ableton, Cubase, Reaper, Studio One, Bitwig, FL Studio Mac (VST3) |
 | **OmniChain-Linux.tar.gz** (x86-64) | `OmniChain.vst3`, `OmniChain.lv2`, `OmniChain.clap`, standalone `OmniChain` | Reaper, Bitwig, Ardour, Carla, Qtractor, … |
 
 **Which format?** **VST3** works almost everywhere. **AU** is for Logic and GarageBand. **CLAP** is a newer open format
@@ -58,12 +58,13 @@ v2.3.2 on clear that up by themselves. With an older installer, close your DAW, 
 1. Double-click the zip to extract it.
 2. Copy the files to these folders (in Finder use **Go → Go to Folder…**):
    * `OmniChain.component` → `~/Library/Audio/Plug-Ins/Components/`
+   * `OmniChain MIDI.component` → `~/Library/Audio/Plug-Ins/Components/` (optional: footswitches in Logic / MainStage, see *New in 2.4*)
    * `OmniChain.vst3` → `~/Library/Audio/Plug-Ins/VST3/`
    * `OmniChain.clap` → `~/Library/Audio/Plug-Ins/CLAP/`
 3. The plugin isn't notarised by Apple (that needs a paid developer account), so macOS will quarantine it.
    Open **Terminal** and run this once:
    ```
-   xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/OmniChain.component ~/Library/Audio/Plug-Ins/VST3/OmniChain.vst3 ~/Library/Audio/Plug-Ins/CLAP/OmniChain.clap
+   xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/OmniChain*.component ~/Library/Audio/Plug-Ins/VST3/OmniChain.vst3 ~/Library/Audio/Plug-Ins/CLAP/OmniChain.clap
    ```
    For the app: right-click `OmniChain.app` → **Open** → **Open**.
 4. Logic Pro: **Logic Pro → Settings → Plug-in Manager → Reset & Rescan Selection** if it doesn't appear.
@@ -95,7 +96,20 @@ Set the audio device under *Options → Audio/MIDI settings*.
     when a pedal doesn't seem to respond. MIDI devices are switched on automatically; you can see them under Audio settings.
   * Mappings belong to your rig, not to a preset: they stay the same whichever preset you load, and are remembered next time.
   * Inside a DAW, use the DAW's own MIDI learn / automation as before. Every knob, power button and the Looper's
-    Footswitch are automatable there.
+    Footswitch are automatable there. **Logic Pro and MainStage** can also use OmniChain's own MIDI learn through
+    **OmniChain MIDI**, see below.
+
+### Footswitches in Logic Pro and MainStage: OmniChain MIDI
+Logic only sends MIDI to plugins registered as *MIDI-controlled effects*, so the Mac download has a second Audio Unit,
+**OmniChain MIDI**. It's the same OmniChain (same sound, same presets) with the app's MIDI learn switched on. The regular
+OmniChain is unchanged, so existing projects aren't affected.
+
+1. Make a **Software Instrument** track. In its instrument slot choose **AU MIDI-controlled Effects → OmniChain → OmniChain MIDI**.
+2. In the plugin window's header, set **Side Chain** to your guitar input (for example *Input 1*), and turn on monitoring for the track.
+3. Map footswitches and pedals exactly as in the app: right-click a control → **MIDI learn**. All mappings are listed
+   under **More → MIDI footswitches and pedals...**. The app and OmniChain MIDI share the same mappings.
+
+GarageBand doesn't host MIDI-controlled effects; use the regular OmniChain there.
 
 ## New in 2.3
 
@@ -297,7 +311,7 @@ expression pedal. Any other knob can be linked the same way, for example Freeze 
 | New in 2.1 | **Prism Shifter**, **Dream Loop**, **Microverse**, plus the redesigned **Looper** |
 | New in 2.2 | **Delay** rebuilt with 15 types (Flashback 2 X4 / DD-8 inspired), Tap, Twist and trails |
 | New in 2.3 | Typed knob values, typed delay time / tempo, offline-first TONE3000 downloads inbox |
-| New in 2.4 | MIDI learn for footswitches and expression pedals in the standalone app |
+| New in 2.4 | MIDI learn for footswitches and expression pedals in the standalone app and in Logic / MainStage (OmniChain MIDI) |
 | Loaders | **NAM Capture** (Neural Amp Modeler `.nam`), **Cab IR Loader** (`.wav/.aif/.flac`, zero-latency partitioned convolution) |
 
 ### About "zero latency"
@@ -317,13 +331,13 @@ git clone --depth 1 --branch 3.4.1 https://gitlab.com/libeigen/eigen.git ThirdPa
 git clone --recursive https://github.com/free-audio/clap-juce-extensions.git ThirdParty/clap-juce-extensions   # optional: CLAP
 cmake -S . -B build -A x64
 cmake --build build --config Release --target OmniChain_VST3 OmniChain_CLAP OmniChain_Standalone
-# macOS adds OmniChain_AU, Linux adds OmniChain_LV2
+# macOS adds OmniChain_AU and OmniChainMIDI_AU (the MIDI-controlled effect), Linux adds OmniChain_LV2
 ```
 
 ### Automatic builds (GitHub Actions)
 
 Every push to `main` runs the DSP stress test, then builds Windows (Visual Studio), macOS (universal, ad-hoc signed,
-checked with Apple's `auval`) and Linux (checked with Steinberg's VST3 validator) in parallel, and attaches the three packages to the run.
+both Audio Units checked with Apple's `auval`) and Linux (checked with Steinberg's VST3 validator) in parallel, and attaches the three packages to the run.
 Download it from the **Actions** tab → latest run → *Artifacts* (you need to be signed in).
 
 To publish a version anyone can download: **Actions** tab → *Build OmniChain* → **Run workflow**, type a version such as `v1.1`, and press Run.

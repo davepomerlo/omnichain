@@ -64,7 +64,7 @@ juce_add_plugin(OmniChain
 
 juce_generate_juce_header(OmniChain)
 
-target_sources(OmniChain PRIVATE
+set(OMNICHAIN_SOURCES
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
     Source/Presets.cpp
@@ -73,17 +73,45 @@ target_sources(OmniChain PRIVATE
     Source/dsp/NamEffect.cpp
     Source/MidiMap.cpp
     Source/dsp/Engine.cpp)
-
-target_compile_definitions(OmniChain PUBLIC
+set(OMNICHAIN_DEFINES
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
     JUCE_REPORT_APP_USAGE=0)
 
+target_sources(OmniChain PRIVATE ${OMNICHAIN_SOURCES})
+target_compile_definitions(OmniChain PUBLIC ${OMNICHAIN_DEFINES})
 target_link_libraries(OmniChain
     PRIVATE juce::juce_audio_utils nam_core
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags juce::juce_recommended_warning_flags)
+
+# macOS: "OmniChain MIDI", a second Audio Unit registered as a MIDI-controlled effect (aumf), so Logic Pro and
+# MainStage send it MIDI and footswitch / pedal mapping works there as in the standalone app.
+# Same sound engine and presets; the regular OmniChain AU (aufx) is untouched, so existing projects keep loading it.
+if(APPLE)
+    juce_add_plugin(OmniChainMIDI
+        COMPANY_NAME "OmniChain"
+        BUNDLE_ID "com.omnichain.multifx.midi"
+        PLUGIN_MANUFACTURER_CODE Omch
+        PLUGIN_CODE Omcm
+        FORMATS AU
+        PRODUCT_NAME "OmniChain MIDI"
+        IS_SYNTH FALSE
+        NEEDS_MIDI_INPUT TRUE
+        NEEDS_MIDI_OUTPUT FALSE
+        IS_MIDI_EFFECT FALSE
+        EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+        AU_MAIN_TYPE kAudioUnitType_MusicEffect
+        AU_SANDBOX_SAFE TRUE
+        COPY_PLUGIN_AFTER_BUILD FALSE)
+    juce_generate_juce_header(OmniChainMIDI)
+    target_sources(OmniChainMIDI PRIVATE ${OMNICHAIN_SOURCES})
+    target_compile_definitions(OmniChainMIDI PUBLIC ${OMNICHAIN_DEFINES})
+    target_link_libraries(OmniChainMIDI
+        PRIVATE juce::juce_audio_utils nam_core
+        PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags juce::juce_recommended_warning_flags)
+endif()
 
 # CLAP (Bitwig, Reaper, FL Studio, Studio One, ...) via clap-juce-extensions (MIT)
 #   git clone --recursive https://github.com/free-audio/clap-juce-extensions.git ThirdParty/clap-juce-extensions

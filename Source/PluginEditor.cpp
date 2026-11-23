@@ -151,10 +151,10 @@ void Knob::setAccent (Colour c) { slider.setColour (Slider::rotarySliderFillColo
 } // namespace ocui
 
 // =====================================================================================
-// MIDI learn menu (standalone app): right-click a knob or button
+// MIDI learn menu (standalone app and OmniChain MIDI): right-click a knob or button
 void enableMidiLearn (OmniChainProcessor& proc, std::function<void()>& hook, String target)
 {
-    if (! proc.isStandalone()) return;
+    if (! proc.usesMidi()) return;
     auto* pp = &proc;
     hook = [pp, target]
     {
@@ -959,7 +959,7 @@ StandaloneBar::StandaloneBar (OmniChainProcessor& p) : proc (p)
 {
     for (auto* b : { (Button*) &audioBtn, (Button*) &inputBtn, (Button*) &tapBtn, (Button*) &metroBtn, (Button*) &tunerBtn, (Button*) &recBtn, (Button*) &folderBtn, (Button*) &midiBtn }) addAndMakeVisible (*b);
     midiBtn.setTooltip ("MIDI footswitches and expression pedals: see and change your mappings. To map: right-click any knob or button.");
-    midiBtn.onClick = [this] { showMidiMenu(); };
+    midiBtn.onClick = [this] { SafePointer<StandaloneBar> safe (this); showMidiMenu (proc, &midiBtn, [safe] { if (safe != nullptr) safe->audioBtn.triggerClick(); }); };
     enableMidiLearn (proc, tapBtn.onRightClick, "tempo.tap");
     enableMidiLearn (proc, metroBtn.onRightClick, "metronome");
     enableMidiLearn (proc, tunerBtn.onRightClick, "tuner");
@@ -1032,8 +1032,8 @@ void StandaloneBar::tap()
     bpm.setValue (proc.hostlessBpm.load(), dontSendNotification);
 }
 
-// Everything about MIDI footswitches and pedals in one menu
-void StandaloneBar::showMidiMenu()
+// Everything about MIDI footswitches and pedals in one menu (the app's MIDI button, or More in OmniChain MIDI)
+void showMidiMenu (OmniChainProcessor& proc, Component* target, std::function<void()> openMidiDevices)
 {
     auto& mm = proc.midiMap;
     PopupMenu m;
@@ -1055,17 +1055,20 @@ void StandaloneBar::showMidiMenu()
     m.addSeparator();
     m.addItem (4, "Program Change messages pick presets", true, mm.programChangeSelectsPresets);
     m.addItem (5, "Remove all mappings", ! mm.bindings.isEmpty());
-    m.addItem (6, "MIDI devices: Audio settings...");
+    if (openMidiDevices != nullptr) m.addItem (6, "MIDI devices: Audio settings...");
     m.addItem (-1, "Last MIDI received: " + (mm.lastReceived.isEmpty() ? String ("nothing yet") : mm.lastReceived), false);
-    SafePointer<StandaloneBar> safe (this);
-    m.showMenuAsync (PopupMenu::Options().withTargetComponent (&midiBtn), [safe] (int r)
+    Component::SafePointer<Component> safeTarget (target);
+    auto opts = PopupMenu::Options();
+    if (target != nullptr) opts = opts.withTargetComponent (target);
+    auto* pp = &proc;
+    m.showMenuAsync (opts, [pp, safeTarget, openMidiDevices] (int r)
     {
-        if (safe == nullptr || r <= 0) return;
-        auto& pr = safe->proc; auto& map = pr.midiMap;
+        if (safeTarget == nullptr || r <= 0) return;   // the window closed
+        auto& pr = *pp; auto& map = pr.midiMap;
         if (r == 3) map.learnTarget.clear();
         else if (r == 4) { map.programChangeSelectsPresets = ! map.programChangeSelectsPresets; pr.saveMidiMap(); }
         else if (r == 5) { map.bindings.clear(); pr.saveMidiMap(); }
-        else if (r == 6) safe->audioBtn.triggerClick();
+        else if (r == 6) { if (openMidiDevices != nullptr) openMidiDevices(); }
         else if (r >= 1000 && r < 2000 && isPositiveAndBelow (r - 1000, map.bindings.size())) { auto& b = map.bindings.getReference (r - 1000); b.latching = ! b.latching; b.last = -1.0f; pr.saveMidiMap(); }
         else if (r >= 2000 && r < 3000 && isPositiveAndBelow (r - 2000, map.bindings.size())) pr.startMidiLearn (map.bindings.getReference (r - 2000).target);
         else if (r >= 3000 && isPositiveAndBelow (r - 3000, map.bindings.size())) { map.bindings.remove (r - 3000); pr.saveMidiMap(); }
@@ -1287,6 +1290,11 @@ void OmniChainPanel::showMoreMenu()
     m.addItem (11, "Downloads folder to watch for captures: " + OmniChainProcessor::getInboxFolder().getFileName() + "...");
     const auto lib = OmniChainProcessor::getLibraryFolder();
     m.addItem (12, lib.isDirectory() ? "Open the factory library folder" : "Factory library not found: set it up from a NAM slot's Load menu", lib.isDirectory());
+    if (proc.usesMidi() && standaloneBar == nullptr)    // OmniChain MIDI in Logic / MainStage (the app has its own MIDI button)
+    {
+        m.addSeparator();
+        m.addItem (30, "MIDI footswitches and pedals...");
+    }
     SafePointer<OmniChainPanel> safe (this);
     m.showMenuAsync (PopupMenu::Options().withTargetComponent (&loadBtn), [safe] (int r)
     {
@@ -1354,6 +1362,7 @@ void OmniChainPanel::showMoreMenu()
                 if (cur.existsAsFile()) pr.loadPresetFile (cur);
                 else for (int i = 0; i < pr.getNumPrograms(); ++i) if (pr.getProgramName (i) == pr.currentPresetName) pr.setCurrentProgram (i);
                 break;
+            case 30: showMidiMenu (pr, &safe->loadBtn, nullptr); break;
             default: break;
         }
     });
@@ -1379,7 +1388,7 @@ void OmniChainPanel::showScale (float sc)
 
 void OmniChainPanel::timerCallback()
 {
-    // MIDI learn banner (standalone app)
+    // MIDI learn banner (standalone app and OmniChain MIDI)
     const auto& lt = proc.midiMap.learnTarget;
     if (lt.isNotEmpty() != learnBanner.isVisible() || (lt.isNotEmpty() && ! learnBanner.getText().contains (proc.describeMidiTarget (lt))))
     {

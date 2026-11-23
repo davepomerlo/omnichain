@@ -30,7 +30,7 @@ OmniChainProcessor::OmniChainProcessor()
     formats.registerBasicFormats();
     markClean();
     startTimerHz (40);
-    if (isStandalone()) { loadMidiMap(); midiTimer.startTimerHz (100); }
+    if (usesMidi()) { loadMidiMap(); midiTimer.startTimerHz (100); }
 }
 
 OmniChainProcessor::~OmniChainProcessor()
@@ -105,7 +105,7 @@ bool OmniChainProcessor::isBusesLayoutSupported (const BusesLayout& layouts) con
 
 void OmniChainProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& midi)
 {
-    if (isStandalone() && ! midi.isEmpty())
+    if (usesMidi() && ! midi.isEmpty())
     {
         const double now = Time::getMillisecondCounterHiRes();
         for (const auto meta : midi) midiMap.push (meta.getMessage(), now);   // acted on by the message thread

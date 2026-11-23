@@ -52,6 +52,8 @@ class OmniChainPanel;
 
 // right-click menu for MIDI learn (standalone app only); target as in MidiMap ("s3.byp", "s3.p2", "preset.next"...)
 void enableMidiLearn (OmniChainProcessor& proc, std::function<void()>& hook, juce::String target);
+// the MIDI mappings menu; openMidiDevices = nullptr hides the "MIDI devices" item (plugins: the host picks the devices)
+void showMidiMenu (OmniChainProcessor& proc, juce::Component* target, std::function<void()> openMidiDevices);
 
 // Buttons, timer and progress bar for a Looper slot
 class LooperPanel : public juce::Component, private juce::Timer
@@ -192,7 +194,6 @@ private:
     OmniChainProcessor& proc;
     juce::TextButton audioBtn { "Audio settings" }, inputBtn { "Input" }, folderBtn { "Recordings" }, midiBtn { "MIDI" };
     RCButton tapBtn { "Tap" }, metroBtn { "Metronome" }, tunerBtn { "Tuner" }, recBtn { "Record" };
-    void showMidiMenu();
     juce::Slider bpm, metroVol;
     juce::Label recTime;
     juce::Array<double> taps;
